@@ -33,9 +33,6 @@ jobs:
           - os: macos-14
             label: macOS (Apple silicon)
             asset: sprint-report-macos-arm64
-          - os: macos-13
-            label: macOS (Intel)
-            asset: sprint-report-macos-x86_64
           - os: ubuntu-22.04
             label: Linux (x86_64)
             asset: sprint-report-linux-x86_64
@@ -158,6 +155,5 @@ jobs:
           )
           gh release create "$TAG" upload/* \
             --title "$TAG" \
-            --notes "$NOTES" \
-            --generate-notes || \
+            --notes "$NOTES" || \
           gh release upload "$TAG" upload/* --clobber
