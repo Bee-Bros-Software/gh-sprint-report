@@ -21,10 +21,6 @@ classifiers = [
     "Topic :: Software Development :: Bug Tracking",
 ]
 
-[project.urls]
-Homepage = "https://github.com/OWNER/gh-sprint-report"
-Issues = "https://github.com/OWNER/gh-sprint-report/issues"
-Changelog = "https://github.com/OWNER/gh-sprint-report/blob/main/CHANGELOG.md"
 dependencies = [
     "openpyxl>=3.1",
     "requests>=2.31",
@@ -47,6 +43,11 @@ docs = [
 
 [project.scripts]
 sprint-report = "sprint_report.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Bee-Bros-Software/gh-sprint-report"
+Issues = "https://github.com/Bee-Bros-Software/gh-sprint-report/issues"
+Changelog = "https://github.com/Bee-Bros-Software/gh-sprint-report/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]
