@@ -1,0 +1,163 @@
+name: Release
+
+# Builds a standalone binary on each target platform and attaches them to a
+# GitHub Release. PyInstaller cannot cross-compile, so every artifact is built
+# on a runner of its own OS.
+#
+# Trigger by pushing a tag:
+#     git tag v1.0.0 && git push origin v1.0.0
+#
+# Or run manually against an existing tag from the Actions tab.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and release"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: macOS (Apple silicon)
+            asset: sprint-report-macos-arm64
+          - os: macos-13
+            label: macOS (Intel)
+            asset: sprint-report-macos-x86_64
+          - os: ubuntu-22.04
+            label: Linux (x86_64)
+            asset: sprint-report-linux-x86_64
+          - os: windows-latest
+            label: Windows (x86_64)
+            asset: sprint-report-windows-x86_64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pyinstaller
+
+      - name: Build
+        working-directory: packaging
+        run: pyinstaller --clean --noconfirm sprint-report.spec
+
+      - name: Smoke test (unix)
+        if: runner.os != 'Windows'
+        run: |
+          ./packaging/dist/sprint-report --help
+          printf '%s' '{"items":[{"id":"a","title":"Example","status":"Done","points":3,"sprint":{"duration":14,"startDate":"2026-01-05","title":"Sprint 1"},"content":{"number":1,"title":"Example","url":"https://example.test/1"}}]}' > board.json
+          ./packaging/dist/sprint-report --from-export board.json report \
+            --iteration "Sprint 1" --output out.pptx --xlsx out.xlsx
+          test -s out.pptx && test -s out.xlsx
+
+      - name: Smoke test (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\packaging\dist\sprint-report.exe --help
+          '{"items":[{"id":"a","title":"Example","status":"Done","points":3,"sprint":{"duration":14,"startDate":"2026-01-05","title":"Sprint 1"},"content":{"number":1,"title":"Example","url":"https://example.test/1"}}]}' | Out-File -Encoding utf8 board.json
+          .\packaging\dist\sprint-report.exe --from-export board.json report --iteration "Sprint 1" --output out.pptx --xlsx out.xlsx
+          if (-not (Test-Path out.pptx)) { exit 1 }
+
+      - name: Rename artifact
+        shell: bash
+        run: |
+          cd packaging/dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv sprint-report.exe "${{ matrix.asset }}"
+          else
+            mv sprint-report "${{ matrix.asset }}"
+            chmod +x "${{ matrix.asset }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: packaging/dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  wheel:
+    name: Wheel and sdist
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build && python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  release:
+    name: Publish release
+    needs: [build, wheel]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect assets
+        run: |
+          mkdir -p upload
+          find artifacts -type f -exec cp {} upload/ \;
+          cd upload && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          NOTES=$(cat <<'EOF'
+          Standalone binaries need no Python. Download the one for your
+          platform, make it executable, and run it.
+
+          **macOS**: these binaries are unsigned, so Gatekeeper will block them
+          on first run. Clear the quarantine flag once:
+
+              xattr -d com.apple.quarantine ./sprint-report-macos-arm64
+
+          **All platforms** still need the GitHub CLI, signed in and carrying
+          the `project` scope:
+
+              gh auth refresh -s project
+
+          Prefer a Python install? `pipx install gh-sprint-report`.
+
+          Verify a download against `SHA256SUMS.txt`.
+          EOF
+          )
+          gh release create "$TAG" upload/* \
+            --title "$TAG" \
+            --notes "$NOTES" \
+            --generate-notes || \
+          gh release upload "$TAG" upload/* --clobber
