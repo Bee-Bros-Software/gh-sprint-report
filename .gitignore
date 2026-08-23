@@ -16,4 +16,3 @@ snapshots/
 *.xlsx
 board.json
 .venv/
-.DS_Store

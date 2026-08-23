@@ -14,6 +14,7 @@ from sprint_report.metrics import (
     iteration_titles,
     milestone_remaining,
     next_business_days,
+    prior_iterations,
     rolling_average,
     velocity_series,
 )
@@ -216,3 +217,80 @@ class TestBusinessDays:
         """A negative count is a programming error."""
         with pytest.raises(ValueError):
             next_business_days(date(2026, 8, 21), -1)
+
+
+class TestPriorIterations:
+    """History must contain only sprints that actually ran."""
+
+    def _board(self):
+        """A board with one past, one current, and two future sprints.
+
+        Returns:
+            Project items spanning four iterations.
+        """
+        from tests.conftest import make_item
+
+        return [
+            make_item("1", "Sprint 0", 8, done=True, start=date(2026, 7, 27)),
+            make_item("2", "Sprint 1", 5, done=True, start=date(2026, 8, 10)),
+            make_item("3", "Sprint 1", 8, start=date(2026, 8, 10)),
+            make_item("4", "Sprint 2", 3, start=date(2026, 8, 24)),
+            make_item("5", "Sprint 3", 5, start=date(2026, 9, 7)),
+        ]
+
+    def test_excludes_future_sprints(self):
+        """An unstarted sprint is not history and must never be charted."""
+        titles = [m.iteration for m in prior_iterations(self._board(), "Sprint 1")]
+        assert titles == ["Sprint 0"]
+
+    def test_excludes_the_current_sprint(self):
+        """The sprint being reported on is not its own history."""
+        assert "Sprint 1" not in [
+            m.iteration for m in prior_iterations(self._board(), "Sprint 1")
+        ]
+
+    def test_orders_oldest_first(self):
+        """Trend charts read left to right in time order."""
+        from tests.conftest import make_item
+
+        board = [
+            make_item("a", "S1", 5, start=date(2026, 6, 1)),
+            make_item("b", "S2", 5, start=date(2026, 6, 15)),
+            make_item("c", "S3", 5, start=date(2026, 7, 1)),
+            make_item("d", "S4", 5, start=date(2026, 7, 15)),
+        ]
+        titles = [m.iteration for m in prior_iterations(board, "S4")]
+        assert titles == ["S1", "S2", "S3"]
+
+    def test_limit_keeps_the_most_recent(self):
+        """A limit trims the oldest, not the newest."""
+        from tests.conftest import make_item
+
+        board = [
+            make_item(str(i), f"S{i}", 5, start=date(2026, 6, i))
+            for i in range(1, 6)
+        ]
+        titles = [m.iteration for m in prior_iterations(board, "S5", limit=2)]
+        assert titles == ["S3", "S4"]
+
+    def test_first_sprint_has_no_history(self):
+        """Nothing ran before the first sprint."""
+        assert prior_iterations(self._board(), "Sprint 0") == []
+
+    def test_undated_current_iteration_yields_nothing(self):
+        """Without a start date there is no timeline to compare against."""
+        from sprint_report.models import ProjectItem
+
+        board = [ProjectItem(item_id="1", title="t", iteration="S1", points=5)]
+        assert prior_iterations(board, "S1") == []
+
+    def test_undated_prior_iterations_are_skipped(self):
+        """A sprint with no dates is excluded rather than guessed at."""
+        from sprint_report.models import ProjectItem
+        from tests.conftest import make_item
+
+        board = [
+            ProjectItem(item_id="x", title="t", iteration="Undated", points=5),
+            make_item("y", "S2", 5, start=date(2026, 8, 24)),
+        ]
+        assert prior_iterations(board, "S2") == []

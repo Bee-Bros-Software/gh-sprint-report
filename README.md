@@ -15,8 +15,7 @@ board data out and builds the reports itself.
 |---|---|
 | Sprint at a glance | Completed points, predictability, unplanned share, rolling average |
 | Burndown | Remaining points per day against a linear ideal |
-| Velocity | Points completed per sprint, with a 3-sprint average |
-| Predictability | Committed against completed |
+| Delivery trend | Committed against completed per sprint — bar height is velocity, filled portion is predictability |
 | Work mix | Planned / unplanned / carryover |
 | Carryover | What rolls forward, heaviest first |
 | Forecast | Sprints remaining per milestone at current velocity |

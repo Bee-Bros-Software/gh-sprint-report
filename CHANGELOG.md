@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] — 2026-08-21
+
+### Changed
+
+- Velocity and predictability are one slide, not two. Completed points per
+  sprint *is* velocity, so the two charts were showing the same series; the
+  merged "Delivery trend" slide carries both — bar height is velocity, filled
+  proportion is predictability.
+- Trend columns are fully overlapped rather than clustered, so each sprint
+  reads as a single progress bar instead of a pair to compare by eye.
+
+## [1.0.1] — 2026-08-21
+
+### Fixed
+
+- Future iterations are no longer charted as history. Iteration fields
+  generate sprints forward, so a board almost always carries unstarted
+  sprints; those were appearing in velocity, predictability, and work-mix
+  charts as zero completed points, dragging the rolling average toward zero
+  and reordering the current sprint to the end of the axis.
+- The title slide uses the board's own name rather than the organisation
+  slug. `--title` overrides it.
+
 ## [1.0.0] — 2026-08-21
 
 First public release.
@@ -23,7 +46,7 @@ First public release.
   rewriting the iteration field.
 - Mid-sprint mode, selected automatically from the iteration dates.
 - Optional delivery to SharePoint or OneDrive via Microsoft Graph.
-- Standalone binaries for macOS (Intel and Apple silicon), Linux, and Windows.
+- Standalone binaries for macOS (Apple silicon), Linux, and Windows.
 
 ### Notes
 

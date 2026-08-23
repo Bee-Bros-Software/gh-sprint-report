@@ -34,6 +34,7 @@ from .models import ProjectItem, _parse_date
 __all__ = [
     "fetch",
     "fetch_issues",
+    "fetch_project_title",
     "parse_export",
     "GhError",
     "FIELD_ALIASES",
@@ -318,3 +319,44 @@ def fetch_issues(
     except json.JSONDecodeError as exc:
         raise GhError(f"gh issue list returned invalid JSON: {exc}") from exc
     return list(payload)
+
+
+def fetch_project_title(
+    org: str, number: int, gh_path: str | None = None
+) -> str:
+    """Read a board's display title.
+
+    ``gh project item-list`` does not carry the board name, so without this
+    the deck falls back to the organisation slug — which is lowercase and
+    reads poorly on a title slide.
+
+    Args:
+        org: Organization login.
+        number: Project board number.
+        gh_path: Explicit path to the ``gh`` binary.
+
+    Returns:
+        The board title, or an empty string if it cannot be read. A missing
+        title is cosmetic, so this never raises.
+
+    Example:
+        >>> fetch_project_title("acme", 4)  # doctest: +SKIP
+        'Delivery'
+    """
+    binary = gh_path or shutil.which("gh")
+    if not binary:
+        return ""
+    try:
+        result = subprocess.run(
+            [binary, "project", "view", str(number), "--owner", org,
+             "--format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if result.returncode != 0:
+            return ""
+        return str(json.loads(result.stdout or "{}").get("title", ""))
+    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+        return ""

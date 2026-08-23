@@ -46,6 +46,7 @@ __all__ = [
     "burndown",
     "forecast_sprints",
     "carryover_items",
+    "prior_iterations",
 ]
 
 #: Origin field value marking work pulled in after sprint start.
@@ -352,3 +353,50 @@ def next_business_days(start: date, count: int) -> list[date]:
             days.append(cursor)
         cursor += timedelta(days=1)
     return days
+
+
+def prior_iterations(
+    items: Iterable[ProjectItem],
+    iteration: str,
+    limit: int | None = None,
+) -> list[SprintMetrics]:
+    """Metrics for the sprints that ran *before* a given iteration.
+
+    A GitHub iteration field is generated forward, so a board almost always
+    carries several future sprints. Those must never appear in a trend: an
+    unstarted sprint has zero completed points, which reads as a collapse in
+    velocity and drags any rolling average toward zero.
+
+    Iterations with no start date cannot be placed on the timeline and are
+    excluded rather than guessed at.
+
+    Args:
+        items: All board items.
+        iteration: The iteration being reported on.
+        limit: If given, keep only the most recent ``limit`` prior sprints.
+
+    Returns:
+        Metrics for strictly earlier iterations, oldest first.
+
+    Example:
+        >>> prior_iterations([], "Sprint 1")
+        []
+    """
+    materialised = list(items)
+    current = iteration_metrics(materialised, iteration)
+    if current.start is None:
+        return []
+
+    earlier: list[SprintMetrics] = []
+    for title in iteration_titles(materialised):
+        if title == iteration:
+            continue
+        metrics = iteration_metrics(materialised, title)
+        if metrics.start is None or metrics.start >= current.start:
+            continue
+        earlier.append(metrics)
+
+    earlier.sort(key=lambda metric: metric.start or date.min)
+    if limit is not None and limit > 0:
+        return earlier[-limit:]
+    return earlier

@@ -368,11 +368,11 @@ class TestDeckBuilder:
         assert self._build(tmp_path, board_items, snapshot_series).exists()
 
     def test_has_expected_slide_count(self, tmp_path: Path, board_items, snapshot_series):
-        """Ten slides when history and snapshots are both present."""
+        """Nine slides when history and snapshots are both present."""
         from pptx import Presentation
 
         path = self._build(tmp_path, board_items, snapshot_series)
-        assert len(Presentation(str(path)).slides) == 10
+        assert len(Presentation(str(path)).slides) == 9
 
     def test_survives_missing_snapshots(self, tmp_path: Path, board_items):
         """With no history the burndown slide degrades to a notice."""
@@ -829,7 +829,7 @@ class TestTrendSlideGuards:
             carryover=[],
             output_path=tmp_path / "with-history.pptx",
         )
-        assert len(Presentation(str(path)).slides) == 8
+        assert len(Presentation(str(path)).slides) == 7
 
 
 class TestModeAndSummary:
@@ -949,3 +949,83 @@ class TestModeAndSummary:
             True,
         )
         assert json.loads(json.dumps(payload))["open_items"][0]["id"] == "1"
+
+
+class TestTrendSlide:
+    """Velocity and predictability are one chart, not two slides."""
+
+    def _deck(self, tmp_path: Path, board_items):
+        """Build a deck with two sprints of history.
+
+        Args:
+            tmp_path: pytest temporary directory.
+            board_items: The synthetic board fixture.
+
+        Returns:
+            The generated deck path.
+        """
+        from sprint_report.metrics import iteration_metrics
+        from sprint_report.models import SprintMetrics
+
+        history = [
+            iteration_metrics(board_items, "Sprint 12"),
+            iteration_metrics(board_items, "Sprint 13"),
+        ]
+        return DeckBuilder("X").build(
+            current=SprintMetrics("Sprint 14", committed_points=16,
+                                  completed_points=11),
+            history=history,
+            burndown_points=[],
+            carryover=[],
+            output_path=tmp_path / "trend.pptx",
+        )
+
+    def _text(self, path: Path) -> str:
+        """Flatten slide text.
+
+        Args:
+            path: Deck to read.
+
+        Returns:
+            All shape text joined by newlines.
+        """
+        from pptx import Presentation
+
+        return "\n".join(
+            shape.text_frame.text
+            for slide in Presentation(str(path)).slides
+            for shape in slide.shapes
+            if shape.has_text_frame
+        )
+
+    def test_no_separate_velocity_slide(self, tmp_path: Path, board_items):
+        """Velocity is the completed series, not its own slide."""
+        text = self._text(self._deck(tmp_path, board_items))
+        assert "Velocity" not in text
+        assert "Delivery trend" in text
+
+    def test_no_separate_predictability_slide(self, tmp_path: Path, board_items):
+        """Predictability is folded into the same chart."""
+        assert "Predictability" not in self._text(self._deck(tmp_path, board_items))
+
+    def test_shows_ratios_per_sprint(self, tmp_path: Path, board_items):
+        """The delivered-against-commitment figures appear as text."""
+        text = self._text(self._deck(tmp_path, board_items))
+        assert "Delivered against commitment" in text
+
+    def test_columns_are_overlapped_not_clustered(self, tmp_path: Path, board_items):
+        """Full overlap makes each sprint read as one progress bar."""
+        from pptx import Presentation
+
+        path = self._deck(tmp_path, board_items)
+        plots = [
+            shape.chart.plots[0]
+            for slide in Presentation(str(path)).slides
+            for shape in slide.shapes
+            if shape.has_chart
+        ]
+        assert plots[0].overlap == 100
+
+    def test_work_mix_stays_stacked(self, tmp_path: Path, board_items):
+        """The planned/unplanned/carryover breakdown remains a stack."""
+        assert "Work mix" in self._text(self._deck(tmp_path, board_items))

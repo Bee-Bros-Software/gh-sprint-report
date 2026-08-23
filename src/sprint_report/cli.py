@@ -28,7 +28,7 @@ from pathlib import Path
 
 from .client import FieldMapping, GitHubApiError, ProjectsClient
 from .deck import DeckBuilder
-from .gh_source import GhError, fetch_issues, parse_export
+from .gh_source import GhError, fetch_issues, fetch_project_title, parse_export
 from .gh_source import fetch as gh_fetch
 from .graph import GraphError, GraphUploader
 from .metrics import (
@@ -37,7 +37,7 @@ from .metrics import (
     iteration_metrics,
     iteration_titles,
     milestone_remaining,
-    velocity_series,
+    prior_iterations,
 )
 from .models import ProjectItem, Snapshot, SprintMetrics, utc_today
 from .snapshots import SnapshotStore
@@ -130,6 +130,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report.add_argument(
         "--subtitle", default="", help="Optional subtitle for the title slide."
+    )
+    report.add_argument(
+        "--title",
+        default=None,
+        help="Title slide heading. Defaults to the board's own name.",
     )
     report.add_argument(
         "--mode",
@@ -628,8 +633,10 @@ def _run_report(args: argparse.Namespace) -> int:
     iteration = _pick_iteration(items, args.iteration)
     current = iteration_metrics(items, iteration)
 
-    series = velocity_series(items, limit=args.history + 1)
-    history = [metric for metric in series if metric.iteration != iteration]
+    # Only sprints that ran BEFORE this one belong in a trend. Iteration
+    # fields generate future sprints automatically, and charting an unstarted
+    # sprint as zero completed points reads as a collapse in velocity.
+    history = prior_iterations(items, iteration, limit=args.history)
 
     store = SnapshotStore(args.snapshots)
     curve = burndown(store.load_all(), iteration)
@@ -647,8 +654,14 @@ def _run_report(args: argparse.Namespace) -> int:
     unsprinted = [item for item in items if item.iteration is None]
     open_items = carryover_items(items, iteration)
 
+    heading = args.title or title
+    if not heading and args.source == "gh" and args.org and args.project:
+        heading = fetch_project_title(args.org, args.project)
+
     output = DeckBuilder(
-        project_title=title or args.org or "Sprint", subtitle=args.subtitle, mode=mode
+        project_title=heading or "Sprint Report",
+        subtitle=args.subtitle,
+        mode=mode,
     ).build(
         current=current,
         history=history,

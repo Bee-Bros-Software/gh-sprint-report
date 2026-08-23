@@ -198,8 +198,7 @@ class DeckBuilder:
         if burndown_points:
             self._burndown_slide(presentation, current, burndown_points)
         if history:
-            self._velocity_slide(presentation, history, current)
-            self._commitment_slide(presentation, history, current)
+            self._trend_slide(presentation, history, current)
             self._work_mix_slide(presentation, history, current)
         self._carryover_slide(presentation, carryover)
         if milestone_forecasts:
@@ -552,13 +551,22 @@ class DeckBuilder:
         chart.series[1].format.line.color.rgb = Palette.rule
         chart.series[1].format.line.width = Pt(1.5)
 
-    def _velocity_slide(
+    def _trend_slide(
         self,
         presentation: Presentation,
         history: Sequence[SprintMetrics],
         current: SprintMetrics,
     ) -> None:
-        """Build the velocity slide.
+        """Build the delivery trend slide.
+
+        One chart carries both figures a review needs: the height of the
+        accent bar is that sprint's velocity, and its proportion of the full
+        bar is predictability. Splitting these across two slides showed the
+        same series twice.
+
+        Columns are fully overlapped rather than clustered — committed sits
+        behind in a light tint, completed in front — so each sprint reads as a
+        single progress bar instead of a pair to compare by eye.
 
         Args:
             presentation: The presentation being built.
@@ -570,104 +578,60 @@ class DeckBuilder:
         average = rolling_average([metric.completed_points for metric in series])
         self._heading(
             slide,
-            "Velocity",
-            f"Points completed per sprint · 3-sprint average {average:g}",
-        )
-
-        if not series:
-            self._empty_notice(slide, "No completed sprints yet.")
-            return
-
-        chart_data = CategoryChartData()
-        chart_data.categories = [metric.iteration for metric in series]
-        chart_data.add_series("Completed", [metric.completed_points for metric in series])
-
-        frame = slide.shapes.add_chart(
-            XL_CHART_TYPE.COLUMN_CLUSTERED,
-            MARGIN,
-            Inches(1.75),
-            SLIDE_WIDTH - 2 * MARGIN,
-            Inches(4.6),
-            chart_data,
-        )
-        chart = frame.chart
-        self._style_chart(chart, show_legend=False, hide_value_axis=True)
-        chart.series[0].format.fill.solid()
-        chart.series[0].format.fill.fore_color.rgb = Palette.accent
-        plot = chart.plots[0]
-        plot.gap_width = 160
-        plot.has_data_labels = True
-        plot.data_labels.font.size = Pt(11)
-        plot.data_labels.font.color.rgb = Palette.ink
-
-        caption = slide.shapes.add_textbox(
-            MARGIN, Inches(6.5), SLIDE_WIDTH - 2 * MARGIN, Inches(0.5)
-        )
-        caption.text_frame.word_wrap = True
-        caption.text_frame.margin_left = 0
-        caption_run = _left_run(caption.text_frame)
-        caption_run.text = (
-            f"Plan against {average:g} points as a ceiling, not a target. "
-            "Ignore the first two or three sprints while estimation settles."
-        )
-        caption_run.font.size = Pt(14)
-        caption_run.font.color.rgb = Palette.muted
-
-    def _commitment_slide(
-        self,
-        presentation: Presentation,
-        history: Sequence[SprintMetrics],
-        current: SprintMetrics,
-    ) -> None:
-        """Build the commitment-versus-completed slide.
-
-        Args:
-            presentation: The presentation being built.
-            history: Prior sprint metrics, oldest first.
-            current: Metrics for the sprint under review.
-        """
-        slide = self._blank(presentation)
-        series = list(history) + [current]
-        self._heading(
-            slide,
-            "Predictability",
-            "Committed against completed — the ratio matters more than the height",
+            "Delivery trend",
+            "Filled portion is what was completed; the full bar is what was "
+            f"committed. Recent average {average:g} points.",
         )
 
         chart_data = CategoryChartData()
         chart_data.categories = [metric.iteration for metric in series]
-        chart_data.add_series("Committed", [metric.committed_points for metric in series])
-        chart_data.add_series("Completed", [metric.completed_points for metric in series])
+        chart_data.add_series(
+            "Committed", [metric.committed_points for metric in series]
+        )
+        chart_data.add_series(
+            "Completed", [metric.completed_points for metric in series]
+        )
 
         frame = slide.shapes.add_chart(
             XL_CHART_TYPE.COLUMN_CLUSTERED,
             MARGIN,
-            Inches(1.75),
+            Inches(1.9),
             SLIDE_WIDTH - 2 * MARGIN,
-            Inches(4.3),
+            Inches(4.1),
             chart_data,
         )
         chart = frame.chart
-        self._style_chart(chart, show_legend=True)
+        self._style_chart(chart, show_legend=True, hide_value_axis=True)
+
         chart.series[0].format.fill.solid()
-        chart.series[0].format.fill.fore_color.rgb = Palette.accent_soft
+        chart.series[0].format.fill.fore_color.rgb = Palette.rule
         chart.series[1].format.fill.solid()
         chart.series[1].format.fill.fore_color.rgb = Palette.accent
-        chart.plots[0].gap_width = 120
-        chart.plots[0].overlap = -10
 
-        ratios = "   ".join(
-            f"{metric.iteration}: {metric.predictability:g}%" for metric in series[-5:]
+        plot = chart.plots[0]
+        plot.overlap = 100
+        plot.gap_width = 130
+
+        ratios = "    ".join(
+            f"{metric.iteration}  {metric.predictability:g}%"
+            for metric in series[-6:]
         )
         box = slide.shapes.add_textbox(
-            MARGIN, Inches(6.2), SLIDE_WIDTH - 2 * MARGIN, Inches(0.5)
+            MARGIN, Inches(6.2), SLIDE_WIDTH - 2 * MARGIN, Inches(0.8)
         )
         box.text_frame.word_wrap = True
         box.text_frame.margin_left = 0
-        run = _left_run(box.text_frame)
-        run.text = ratios
-        run.font.size = Pt(13)
-        run.font.color.rgb = Palette.muted
+        label = _left_run(box.text_frame)
+        label.text = "Delivered against commitment"
+        label.font.size = Pt(12)
+        label.font.color.rgb = Palette.muted
+
+        values = box.text_frame.add_paragraph()
+        values.alignment = PP_ALIGN.LEFT
+        values_run = values.add_run()
+        values_run.text = ratios
+        values_run.font.size = Pt(16)
+        values_run.font.color.rgb = Palette.ink
 
     def _work_mix_slide(
         self,
