@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] — 2026-08-23
+
+### Fixed
+
+- The generation timestamp crashed on Windows. `%-d` is a glibc extension for
+  a day number without a leading zero; Windows spells it `%#d` and rejects
+  the other, so neither is portable. The day is now formatted from the
+  integer, and a test scans the function for either directive.
+- Console output and `--help` text are now ASCII. Windows terminals default
+  to cp1252 and rendered em dashes as replacement characters.
+
+## [1.3.0] — 2026-08-23
+
+### Added
+
+- A **Burnup** slide, drawn from the same daily data as the burndown. It is
+  the framing that makes scope visible: a burndown flattening could mean work
+  stalled or work being added, and only a burnup distinguishes them. Scope
+  moves when the curve comes from snapshots and is flat when reconstructed
+  from closure dates, which the sub-heading states.
+- `BurndownPoint` carries `scope`, with `completed` derived from it, so the
+  two framings are computed from one record and cannot disagree.
+
+### Changed
+
+- **Velocity** is a line chart again, on its own slide, with committed and
+  completed as lines plus a flat recent-average reference. Direction over
+  time reads better as a line than as columns; the delivered-against-
+  commitment percentages remain beneath it.
+
 ## [1.2.1] — 2026-08-23
 
 ### Added

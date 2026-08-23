@@ -368,11 +368,11 @@ class TestDeckBuilder:
         assert self._build(tmp_path, board_items, snapshot_series).exists()
 
     def test_has_expected_slide_count(self, tmp_path: Path, board_items, snapshot_series):
-        """Nine slides when history and snapshots are both present."""
+        """Ten slides when history and snapshots are both present."""
         from pptx import Presentation
 
         path = self._build(tmp_path, board_items, snapshot_series)
-        assert len(Presentation(str(path)).slides) == 9
+        assert len(Presentation(str(path)).slides) == 10
 
     def test_survives_missing_snapshots(self, tmp_path: Path, board_items):
         """With no history the burndown slide degrades to a notice."""
@@ -1050,14 +1050,31 @@ class TestTrendSlide:
             if shape.has_text_frame
         )
 
-    def test_no_separate_velocity_slide(self, tmp_path: Path, board_items):
-        """Velocity is the completed series, not its own slide."""
-        text = self._text(self._deck(tmp_path, board_items))
-        assert "Velocity" not in text
-        assert "Delivery trend" in text
+    def test_velocity_is_a_line_chart(self, tmp_path: Path, board_items):
+        """Direction over time reads better as a line than as columns."""
+        from pptx import Presentation
+        from pptx.enum.chart import XL_CHART_TYPE
+
+        path = self._deck(tmp_path, board_items)
+        charts = [
+            shape.chart
+            for slide in Presentation(str(path)).slides
+            for shape in slide.shapes
+            if shape.has_chart
+        ]
+        velocity = charts[0]
+        assert velocity.chart_type in (
+            XL_CHART_TYPE.LINE_MARKERS,
+            XL_CHART_TYPE.LINE,
+        )
+        assert [s.name for s in velocity.series] == [
+            "Completed",
+            "Committed",
+            "Average",
+        ]
 
     def test_no_separate_predictability_slide(self, tmp_path: Path, board_items):
-        """Predictability is folded into the same chart."""
+        """Predictability is folded into the velocity chart, not its own slide."""
         assert "Predictability" not in self._text(self._deck(tmp_path, board_items))
 
     def test_shows_ratios_per_sprint(self, tmp_path: Path, board_items):
@@ -1065,18 +1082,9 @@ class TestTrendSlide:
         text = self._text(self._deck(tmp_path, board_items))
         assert "Delivered against commitment" in text
 
-    def test_columns_are_overlapped_not_clustered(self, tmp_path: Path, board_items):
-        """Full overlap makes each sprint read as one progress bar."""
-        from pptx import Presentation
-
-        path = self._deck(tmp_path, board_items)
-        plots = [
-            shape.chart.plots[0]
-            for slide in Presentation(str(path)).slides
-            for shape in slide.shapes
-            if shape.has_chart
-        ]
-        assert plots[0].overlap == 100
+    def test_velocity_slide_is_titled(self, tmp_path: Path, board_items):
+        """The slide says what it is."""
+        assert "Velocity" in self._text(self._deck(tmp_path, board_items))
 
     def test_work_mix_stays_stacked(self, tmp_path: Path, board_items):
         """The planned/unplanned/carryover breakdown remains a stack."""
@@ -1479,3 +1487,66 @@ class TestGenerationStamp:
             output_path=tmp_path / "mid.pptx",
         )
         assert "Mid-Sprint Check" in Presentation(str(path)).core_properties.title
+
+
+class TestStampPortability:
+    """The timestamp must format identically on every platform."""
+
+    def test_no_platform_specific_directives(self):
+        """'%-d' is glibc-only and raises ValueError on Windows."""
+        import inspect
+
+        from sprint_report import deck
+
+        source = inspect.getsource(deck.generation_stamp)
+        assert "%-" not in source
+        assert "%#" not in source
+
+    def test_single_digit_day_has_no_leading_zero(self):
+        """The reason '%-d' was reached for in the first place."""
+        from datetime import datetime
+
+        from sprint_report.deck import generation_stamp
+
+        moment = datetime(2026, 9, 5, 9, 4, tzinfo=UTC)
+        assert generation_stamp(moment) == "5 September 2026 at 09:04 UTC"
+
+    def test_double_digit_day(self):
+        """Two-digit days are unchanged."""
+        from datetime import datetime
+
+        from sprint_report.deck import generation_stamp
+
+        moment = datetime(2026, 12, 25, 23, 59, tzinfo=UTC)
+        assert generation_stamp(moment) == "25 December 2026 at 23:59 UTC"
+
+    def test_naive_datetime_still_stamps(self):
+        """A datetime with no timezone falls back to a readable label."""
+        from datetime import datetime
+
+        from sprint_report.deck import generation_stamp
+
+        assert "local time" in generation_stamp(datetime(2026, 8, 23, 14, 32))
+
+    def test_help_text_is_ascii(self):
+        """Windows consoles default to cp1252 and mangle em dashes."""
+        from sprint_report.cli import build_parser
+
+        parser = build_parser()
+        for action in parser._actions:
+            if action.help:
+                action.help.encode("ascii")
+
+
+class TestConsoleOutputIsAscii:
+    """Anything printed must survive a cp1252 Windows console."""
+
+    def test_stderr_messages_are_ascii(self):
+        """Non-ASCII in console output renders as replacement characters."""
+        import inspect
+
+        from sprint_report import cli
+
+        for line in inspect.getsource(cli).split("\n"):
+            if "print(" in line or "file=sys.stderr" in line:
+                line.encode("ascii")

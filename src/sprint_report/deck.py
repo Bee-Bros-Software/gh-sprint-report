@@ -9,6 +9,7 @@ Slide order:
 1. Title
 2. Sprint summary (headline figures)
 3. Burndown
+4. Burnup
 4. Velocity and rolling average
 5. Commitment vs completed
 6. Work mix (planned / unplanned / carryover)
@@ -94,7 +95,10 @@ def generation_stamp(moment: datetime | None = None) -> str:
     """
     when = moment or datetime.now().astimezone()
     zone = when.strftime("%Z") or "local time"
-    return f"{when:%-d %B %Y} at {when:%H:%M} {zone}"
+    # The day comes from the integer rather than a strftime directive. The
+    # no-padding directives are platform-specific — glibc and Windows spell
+    # them differently, and each rejects the other's — so neither is portable.
+    return f"{when.day} {when:%B %Y} at {when:%H:%M} {zone}"
 
 
 class Palette:
@@ -230,6 +234,9 @@ class DeckBuilder:
         self._summary_slide(presentation, current, history)
         if burndown_points:
             self._burndown_slide(
+                presentation, current, burndown_points, burndown_reconstructed
+            )
+            self._burnup_slide(
                 presentation, current, burndown_points, burndown_reconstructed
             )
         if history:
@@ -645,22 +652,72 @@ class DeckBuilder:
         chart.series[1].format.line.color.rgb = Palette.rule
         chart.series[1].format.line.width = Pt(1.5)
 
+    def _burnup_slide(
+        self,
+        presentation: Presentation,
+        current: SprintMetrics,
+        points: Sequence[BurndownPoint],
+        reconstructed: bool = False,
+    ) -> None:
+        """Build the burnup slide.
+
+        The same daily data as the burndown, read the other way: completed
+        work rising toward a scope line. This is the framing that makes scope
+        change visible — a burndown flattening could mean work stalled or
+        work being added, and only a burnup distinguishes them.
+
+        Args:
+            presentation: The presentation being built.
+            current: Metrics for the sprint under review.
+            points: The daily curve.
+            reconstructed: Whether the curve came from closure dates, in which
+                case scope is flat because nothing records when items joined.
+        """
+        slide = self._blank(presentation)
+        self._heading(
+            slide,
+            "Burnup",
+            "Completed work rising toward total scope"
+            + (
+                " · scope is flat here because closure dates cannot say when "
+                "an item joined the sprint"
+                if reconstructed
+                else " · a rising scope line is work added mid-sprint"
+            ),
+        )
+
+        chart_data = CategoryChartData()
+        chart_data.categories = [point.day.strftime("%d %b") for point in points]
+        chart_data.add_series("Completed", [point.completed for point in points])
+        chart_data.add_series("Scope", [point.scope for point in points])
+
+        frame = slide.shapes.add_chart(
+            XL_CHART_TYPE.LINE_MARKERS,
+            MARGIN,
+            Inches(1.9),
+            SLIDE_WIDTH - 2 * MARGIN,
+            Inches(4.7),
+            chart_data,
+        )
+        chart = frame.chart
+        self._style_chart(chart, show_legend=True)
+        chart.series[0].format.line.color.rgb = Palette.accent
+        chart.series[0].format.line.width = Pt(2.75)
+        chart.series[1].format.line.color.rgb = Palette.rule
+        chart.series[1].format.line.width = Pt(2)
+
     def _trend_slide(
         self,
         presentation: Presentation,
         history: Sequence[SprintMetrics],
         current: SprintMetrics,
     ) -> None:
-        """Build the delivery trend slide.
+        """Build the velocity slide.
 
-        One chart carries both figures a review needs: the height of the
-        accent bar is that sprint's velocity, and its proportion of the full
-        bar is predictability. Splitting these across two slides showed the
-        same series twice.
-
-        Columns are fully overlapped rather than clustered — committed sits
-        behind in a light tint, completed in front — so each sprint reads as a
-        single progress bar instead of a pair to compare by eye.
+        Committed and completed points per sprint, drawn as lines because the
+        question is direction over time rather than the size of any one
+        sprint. The gap between the lines is what was not delivered, and the
+        percentages beneath give it as a ratio.
 
         Args:
             presentation: The presentation being built.
@@ -672,22 +729,22 @@ class DeckBuilder:
         average = rolling_average([metric.completed_points for metric in series])
         self._heading(
             slide,
-            "Delivery trend",
-            "Filled portion is what was completed; the full bar is what was "
-            f"committed. Recent average {average:g} points.",
+            "Velocity",
+            f"Points per sprint · recent average {average:g} completed",
         )
 
         chart_data = CategoryChartData()
         chart_data.categories = [metric.iteration for metric in series]
         chart_data.add_series(
-            "Committed", [metric.committed_points for metric in series]
-        )
-        chart_data.add_series(
             "Completed", [metric.completed_points for metric in series]
         )
+        chart_data.add_series(
+            "Committed", [metric.committed_points for metric in series]
+        )
+        chart_data.add_series("Average", [average] * len(series))
 
         frame = slide.shapes.add_chart(
-            XL_CHART_TYPE.COLUMN_CLUSTERED,
+            XL_CHART_TYPE.LINE_MARKERS,
             MARGIN,
             Inches(1.9),
             SLIDE_WIDTH - 2 * MARGIN,
@@ -695,16 +752,13 @@ class DeckBuilder:
             chart_data,
         )
         chart = frame.chart
-        self._style_chart(chart, show_legend=True, hide_value_axis=True)
-
-        chart.series[0].format.fill.solid()
-        chart.series[0].format.fill.fore_color.rgb = Palette.rule
-        chart.series[1].format.fill.solid()
-        chart.series[1].format.fill.fore_color.rgb = Palette.accent
-
-        plot = chart.plots[0]
-        plot.overlap = 100
-        plot.gap_width = 130
+        self._style_chart(chart, show_legend=True)
+        chart.series[0].format.line.color.rgb = Palette.accent
+        chart.series[0].format.line.width = Pt(2.75)
+        chart.series[1].format.line.color.rgb = Palette.accent_soft
+        chart.series[1].format.line.width = Pt(2)
+        chart.series[2].format.line.color.rgb = Palette.rule
+        chart.series[2].format.line.width = Pt(1.25)
 
         ratios = "    ".join(
             f"{metric.iteration}  {metric.predictability:g}%"

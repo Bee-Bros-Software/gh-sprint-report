@@ -243,6 +243,9 @@ def burndown(snapshots: Sequence[Snapshot], iteration: str) -> list[BurndownPoin
                 day=snapshot.captured_on,
                 remaining=round(remaining, 1),
                 ideal=round(opening_scope * (1 - ratio), 1),
+                # Scope is read per day, so a burnup built from snapshots
+                # shows mid-sprint growth as the scope line rising.
+                scope=round(sum_points(scoped), 1),
             )
         )
     return points
@@ -484,6 +487,9 @@ def burndown_from_closures(
                 day=day,
                 remaining=round(total - burned, 1),
                 ideal=round(total * (1 - min(elapsed / span, 1.0)), 1),
+                # Closure dates cannot say when an item joined the sprint, so
+                # scope is flat here. Snapshots are what make it move.
+                scope=round(total, 1),
             )
         )
         day += timedelta(days=1)

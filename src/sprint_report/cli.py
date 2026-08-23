@@ -94,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Where to read the board. 'gh' shells out to the gh CLI and needs "
             "no token (default). 'api' calls the GraphQL API and needs "
-            f"${TOKEN_ENV_VAR} — used by the scheduled workflow."
+            f"${TOKEN_ENV_VAR}, used by the scheduled workflow."
         ),
     )
     parser.add_argument(
@@ -807,7 +807,7 @@ def _run_report(args: argparse.Namespace) -> int:
     _deliver(args, output, iteration)
     if not curve:
         print(
-            "Note: no burndown could be produced — the sprint has no dates or "
+            "Note: no burndown could be produced - the sprint has no dates or "
             "no estimated work. Run 'snapshot' daily for an accurate curve.",
             file=sys.stderr,
         )

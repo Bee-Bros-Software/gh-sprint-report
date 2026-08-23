@@ -279,3 +279,76 @@ class TestStatusReconciliation:
         result = cli._apply_closure_dates(self._args(), board)
         assert result[0].is_complete
         assert "Issue state unavailable" in capsys.readouterr().err
+
+
+class TestBurnup:
+    """The burnup reads the same daily data the other way."""
+
+    def test_completed_is_scope_minus_remaining(self):
+        """The two framings are derived from one record, so cannot disagree."""
+        from sprint_report.models import BurndownPoint
+
+        point = BurndownPoint(date(2026, 8, 12), remaining=32.0, ideal=36.0, scope=40.0)
+        assert point.completed == 8.0
+
+    def test_completed_never_negative(self):
+        """Scope shrinking below completed work is floored, not negative."""
+        from sprint_report.models import BurndownPoint
+
+        point = BurndownPoint(date(2026, 8, 12), remaining=50.0, ideal=0.0, scope=40.0)
+        assert point.completed == 0.0
+
+    def test_reconstructed_scope_is_flat(self):
+        """Closure dates cannot say when an item joined, so scope is constant."""
+        board = [
+            item(1, 8, date(2026, 8, 12)),
+            item(2, 5, date(2026, 8, 14)),
+            item(3, 27),
+        ]
+        curve = burndown_from_closures(board, "Sprint 1", today=date(2026, 8, 16))
+        assert {p.scope for p in curve} == {40.0}
+
+    def test_reconstructed_completed_rises(self):
+        """The burnup line climbs as work closes."""
+        board = [item(1, 8, date(2026, 8, 12)), item(2, 32)]
+        curve = burndown_from_closures(board, "Sprint 1", today=date(2026, 8, 14))
+        assert curve[0].completed == 0.0
+        assert curve[-1].completed == 8.0
+
+    def test_snapshot_scope_tracks_changes(self):
+        """Snapshots record scope per day, so growth becomes visible."""
+        from sprint_report.metrics import burndown
+        from sprint_report.models import Snapshot
+
+        day_one = Snapshot(date(2026, 8, 10), "B", [item(1, 20)])
+        day_two = Snapshot(date(2026, 8, 11), "B", [item(1, 20), item(2, 15)])
+        curve = burndown([day_one, day_two], "Sprint 1")
+        assert curve[0].scope == 20.0
+        assert curve[1].scope == 35.0
+
+    def test_deck_renders_a_burnup_slide(self, tmp_path):
+        """A burndown always comes with its burnup."""
+        from pptx import Presentation
+
+        from sprint_report.deck import DeckBuilder
+        from sprint_report.metrics import iteration_metrics
+
+        board = [item(1, 8, date(2026, 8, 12)), item(2, 32)]
+        curve = burndown_from_closures(board, "Sprint 1", today=date(2026, 8, 16))
+        path = DeckBuilder("X").build(
+            current=iteration_metrics(board, "Sprint 1"),
+            history=[],
+            burndown_points=curve,
+            carryover=[],
+            output_path=tmp_path / "burnup.pptx",
+            burndown_reconstructed=True,
+        )
+        text = "\n".join(
+            shape.text_frame.text
+            for slide in Presentation(str(path)).slides
+            for shape in slide.shapes
+            if shape.has_text_frame
+        )
+        assert "Burnup" in text
+        assert "Burndown" in text
+        assert "scope is flat here" in text

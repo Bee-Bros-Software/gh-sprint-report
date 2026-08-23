@@ -304,22 +304,44 @@ class Snapshot:
 
 @dataclass(frozen=True)
 class BurndownPoint:
-    """One day on a sprint burndown curve.
+    """One day on a sprint curve.
+
+    Carries enough for both framings: a burndown reads :attr:`remaining`
+    against :attr:`ideal`, and a burnup reads :attr:`completed` against
+    :attr:`scope`. Keeping them on one record means the two charts can never
+    disagree.
 
     Attributes:
         day: The calendar day.
         remaining: Points still incomplete at end of day.
         ideal: Points that would remain under a linear ideal burn.
+        scope: Total points in the sprint on that day. Constant unless
+            snapshots recorded scope changing mid-sprint.
 
     Example:
         >>> from datetime import date
-        >>> BurndownPoint(date(2026, 8, 10), 40.0, 40.0).remaining
-        40.0
+        >>> BurndownPoint(date(2026, 8, 10), 40.0, 40.0, 40.0).completed
+        0.0
     """
 
     day: date
     remaining: float
     ideal: float
+    scope: float = 0.0
+
+    @property
+    def completed(self) -> float:
+        """Points finished by end of day.
+
+        Returns:
+            Scope minus remaining, floored at zero.
+
+        Example:
+            >>> from datetime import date
+            >>> BurndownPoint(date(2026, 8, 12), 32.0, 36.0, 40.0).completed
+            8.0
+        """
+        return max(self.scope - self.remaining, 0.0)
 
 
 @dataclass(frozen=True)

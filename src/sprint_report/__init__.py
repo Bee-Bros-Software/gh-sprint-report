@@ -15,4 +15,4 @@ from __future__ import annotations
 __all__ = ["__version__"]
 
 #: Package version, kept in step with ``pyproject.toml``.
-__version__ = "1.2.1"
+__version__ = "1.3.1"
