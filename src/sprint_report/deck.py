@@ -199,6 +199,10 @@ class DeckBuilder:
             self._burndown_slide(presentation, current, burndown_points)
         if history:
             self._trend_slide(presentation, history, current)
+        # Work mix needs no history: the planned/unplanned/carryover split of
+        # a single sprint is a composition, not a trend, and is worth showing
+        # from the first sprint onward.
+        if current.committed_points > 0:
             self._work_mix_slide(presentation, history, current)
         self._carryover_slide(presentation, carryover)
         if milestone_forecasts:
@@ -648,10 +652,13 @@ class DeckBuilder:
         """
         slide = self._blank(presentation)
         series = list(history) + [current]
+        single = len(series) == 1
         self._heading(
             slide,
             "Work mix",
-            "How much of each sprint was actually planned",
+            "What this sprint was actually made of"
+            if single
+            else "How much of each sprint was actually planned",
         )
 
         chart_data = CategoryChartData()
@@ -660,12 +667,14 @@ class DeckBuilder:
         chart_data.add_series("Unplanned", [m.unplanned_points for m in series])
         chart_data.add_series("Carryover", [m.carryover_points for m in series])
 
+        # A lone stacked column is a slab; a single horizontal bar spanning
+        # the slide reads as a composition, which is what one sprint is.
         frame = slide.shapes.add_chart(
-            XL_CHART_TYPE.COLUMN_STACKED,
+            XL_CHART_TYPE.BAR_STACKED if single else XL_CHART_TYPE.COLUMN_STACKED,
             MARGIN,
-            Inches(1.75),
+            Inches(2.2) if single else Inches(1.75),
             SLIDE_WIDTH - 2 * MARGIN,
-            Inches(4.3),
+            Inches(2.2) if single else Inches(4.3),
             chart_data,
         )
         chart = frame.chart
@@ -675,10 +684,18 @@ class DeckBuilder:
         ):
             chart.series[index].format.fill.solid()
             chart.series[index].format.fill.fore_color.rgb = colour
-        chart.plots[0].gap_width = 140
+        chart.plots[0].gap_width = 70 if single else 140
+        if single:
+            chart.plots[0].has_data_labels = True
+            chart.plots[0].data_labels.font.size = Pt(13)
+            chart.plots[0].data_labels.font.bold = True
+            chart.plots[0].data_labels.font.color.rgb = Palette.white
 
         box = slide.shapes.add_textbox(
-            MARGIN, Inches(6.2), SLIDE_WIDTH - 2 * MARGIN, Inches(0.6)
+            MARGIN,
+            Inches(5.0) if single else Inches(6.2),
+            SLIDE_WIDTH - 2 * MARGIN,
+            Inches(0.9),
         )
         box.text_frame.margin_left = 0
         box.text_frame.word_wrap = True

@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] — 2026-08-23
+
+### Fixed
+
+- The final day of a sprint now resolves to `review`, not `midsprint`. An
+  inclusive end date meant a review held on the closing day was labelled a
+  mid-sprint check.
+
+### Changed
+
+- The work mix slide no longer requires prior sprints. A single sprint's
+  planned/unplanned/carryover split is a composition, not a trend, and is
+  useful from the first sprint onward. With one sprint it renders as a
+  horizontal stacked bar with in-bar labels rather than a lone column.
+
 ## [1.0.2] — 2026-08-21
 
 ### Changed

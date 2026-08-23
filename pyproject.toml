@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gh-sprint-report"
-version = "1.0.2"
+version = "1.0.3"
 description = "Sprint reports, review decks, and follow-up workbooks from a GitHub Projects board."
 readme = "README.md"
 requires-python = ">=3.11"

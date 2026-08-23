@@ -432,7 +432,8 @@ def _resolve_mode(requested: str, current: SprintMetrics) -> str:
         current: Metrics for the sprint being reported on.
 
     Returns:
-        Either ``"review"`` or ``"midsprint"``.
+        Either ``"review"`` or ``"midsprint"``. The sprint's final day
+        resolves to ``"review"``, since that is when the review is held.
 
     Example:
         >>> _resolve_mode("review", SprintMetrics("S1"))
@@ -440,8 +441,12 @@ def _resolve_mode(requested: str, current: SprintMetrics) -> str:
     """
     if requested != "auto":
         return requested
-    if current.start and current.end and current.start <= utc_today() <= current.end:
-        return "midsprint"
+    if current.start and current.end:
+        # The last day is when the review happens, so it counts as "review"
+        # rather than "midsprint" — an inclusive end date would label the
+        # sprint review itself as a mid-sprint check.
+        if current.start <= utc_today() < current.end:
+            return "midsprint"
     return "review"
 
 

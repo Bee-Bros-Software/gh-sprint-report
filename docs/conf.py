@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath("../src"))
 project = "gh-sprint-report"
 copyright = "R Software & Consulting LLC"
 author = "R Software & Consulting LLC"
-release = "1.0.2"
+release = "1.0.3"
 
 extensions = [
     "sphinx.ext.autodoc",

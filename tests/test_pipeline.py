@@ -767,8 +767,57 @@ class TestTrendSlideGuards:
         return len(Presentation(str(path)).slides)
 
     def test_first_sprint_omits_trend_slides(self, tmp_path: Path):
-        """With no prior sprints only title, summary, carryover, two lists."""
-        assert self._slide_count(tmp_path) == 5
+        """No prior sprints means no trend, but work mix still renders."""
+        assert self._slide_count(tmp_path) == 6
+
+    def test_work_mix_renders_without_history(self, tmp_path: Path):
+        """A single sprint's composition is meaningful on its own."""
+        from pptx import Presentation
+
+        from sprint_report.models import SprintMetrics
+
+        path = DeckBuilder("X").build(
+            current=SprintMetrics(
+                "Sprint 1",
+                committed_points=110,
+                planned_points=83,
+                unplanned_points=22,
+                carryover_points=5,
+            ),
+            history=[],
+            burndown_points=[],
+            carryover=[],
+            output_path=tmp_path / "mix.pptx",
+        )
+        text = "\n".join(
+            shape.text_frame.text
+            for slide in Presentation(str(path)).slides
+            for shape in slide.shapes
+            if shape.has_text_frame
+        )
+        assert "Work mix" in text
+        assert "What this sprint was actually made of" in text
+
+    def test_work_mix_omitted_when_nothing_committed(self, tmp_path: Path):
+        """An empty sprint has no composition to show."""
+        from pptx import Presentation
+
+        from sprint_report.models import SprintMetrics
+
+        path = DeckBuilder("X").build(
+            current=SprintMetrics("Sprint 1"),
+            history=[],
+            burndown_points=[],
+            carryover=[],
+            output_path=tmp_path / "empty.pptx",
+        )
+        text = "\n".join(
+            shape.text_frame.text
+            for slide in Presentation(str(path)).slides
+            for shape in slide.shapes
+            if shape.has_text_frame
+        )
+        assert "Work mix" not in text
 
     def test_no_milestones_omits_forecast(self, tmp_path: Path):
         """An empty forecast is left out rather than shown as a notice."""
@@ -817,7 +866,7 @@ class TestTrendSlideGuards:
         from sprint_report.metrics import iteration_metrics
 
         history = [iteration_metrics(board_items, "Sprint 12")]
-        assert self._slide_count(tmp_path) == 5
+        assert self._slide_count(tmp_path) == 6
         from pptx import Presentation
 
         from sprint_report.models import SprintMetrics
@@ -1029,3 +1078,51 @@ class TestTrendSlide:
     def test_work_mix_stays_stacked(self, tmp_path: Path, board_items):
         """The planned/unplanned/carryover breakdown remains a stack."""
         assert "Work mix" in self._text(self._deck(tmp_path, board_items))
+
+
+class TestModeAtSprintBoundary:
+    """The final day of a sprint is review day."""
+
+    def test_last_day_is_a_review(self, monkeypatch):
+        """A review held on the closing day should not say 'mid-sprint'."""
+        from datetime import date
+
+        from sprint_report import cli
+        from sprint_report.models import SprintMetrics
+
+        monkeypatch.setattr(cli, "utc_today", lambda: date(2026, 8, 23))
+        metrics = SprintMetrics("Sprint 1", date(2026, 8, 10), date(2026, 8, 23))
+        assert cli._resolve_mode("auto", metrics) == "review"
+
+    def test_day_before_the_end_is_midsprint(self, monkeypatch):
+        """The day before close is still work in flight."""
+        from datetime import date
+
+        from sprint_report import cli
+        from sprint_report.models import SprintMetrics
+
+        monkeypatch.setattr(cli, "utc_today", lambda: date(2026, 8, 22))
+        metrics = SprintMetrics("Sprint 1", date(2026, 8, 10), date(2026, 8, 23))
+        assert cli._resolve_mode("auto", metrics) == "midsprint"
+
+    def test_first_day_is_midsprint(self, monkeypatch):
+        """Day one is not a review."""
+        from datetime import date
+
+        from sprint_report import cli
+        from sprint_report.models import SprintMetrics
+
+        monkeypatch.setattr(cli, "utc_today", lambda: date(2026, 8, 10))
+        metrics = SprintMetrics("Sprint 1", date(2026, 8, 10), date(2026, 8, 23))
+        assert cli._resolve_mode("auto", metrics) == "midsprint"
+
+    def test_after_the_end_is_a_review(self, monkeypatch):
+        """A closed sprint always reviews."""
+        from datetime import date
+
+        from sprint_report import cli
+        from sprint_report.models import SprintMetrics
+
+        monkeypatch.setattr(cli, "utc_today", lambda: date(2026, 8, 30))
+        metrics = SprintMetrics("Sprint 1", date(2026, 8, 10), date(2026, 8, 23))
+        assert cli._resolve_mode("auto", metrics) == "review"
