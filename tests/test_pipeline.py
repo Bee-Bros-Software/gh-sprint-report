@@ -796,7 +796,7 @@ class TestTrendSlideGuards:
             if shape.has_text_frame
         )
         assert "Work mix" in text
-        assert "What this sprint was actually made of" in text
+        assert "Where this sprint's work came from" in text
 
     def test_work_mix_omitted_when_nothing_committed(self, tmp_path: Path):
         """An empty sprint has no composition to show."""
@@ -1126,3 +1126,254 @@ class TestModeAtSprintBoundary:
         monkeypatch.setattr(cli, "utc_today", lambda: date(2026, 8, 30))
         metrics = SprintMetrics("Sprint 1", date(2026, 8, 10), date(2026, 8, 23))
         assert cli._resolve_mode("auto", metrics) == "review"
+
+
+class TestCarryoverDirection:
+    """The two directions of carried work must never share a label."""
+
+    def _text(self, path: Path) -> str:
+        """Flatten every shape and table cell.
+
+        Args:
+            path: Deck to read.
+
+        Returns:
+            All text joined by newlines.
+        """
+        from pptx import Presentation
+
+        chunks = []
+        for slide in Presentation(str(path)).slides:
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    chunks.append(shape.text_frame.text)
+                if shape.has_chart:
+                    chunks.extend(s.name or "" for s in shape.chart.series)
+        return "\n".join(chunks)
+
+    def test_work_mix_says_carried_in(self, tmp_path: Path):
+        """The Origin breakdown describes where work came FROM."""
+        from sprint_report.models import SprintMetrics
+
+        path = DeckBuilder("X").build(
+            current=SprintMetrics(
+                "S1", committed_points=110, planned_points=83,
+                unplanned_points=22, carryover_points=5,
+            ),
+            history=[],
+            burndown_points=[],
+            carryover=[],
+            output_path=tmp_path / "in.pptx",
+        )
+        assert "Carried in" in self._text(path)
+
+    def test_open_work_slide_says_rolling_forward(self, tmp_path: Path):
+        """Incomplete work describes where it is going TO."""
+        from sprint_report.models import SprintMetrics
+
+        path = DeckBuilder("X").build(
+            current=SprintMetrics("S1"),
+            history=[],
+            burndown_points=[],
+            carryover=[ProjectItem(item_id="1", title="t", points=5)],
+            output_path=tmp_path / "out.pptx",
+        )
+        text = self._text(path)
+        assert "Rolling forward" in text
+        assert "moving to the next sprint" in text
+
+    def test_the_word_carryover_is_not_reused(self, tmp_path: Path):
+        """One deck must not use 'Carryover' for both directions."""
+        from sprint_report.models import SprintMetrics
+
+        path = DeckBuilder("X").build(
+            current=SprintMetrics(
+                "S1", committed_points=110, planned_points=83,
+                unplanned_points=22, carryover_points=5,
+            ),
+            history=[],
+            burndown_points=[],
+            carryover=[ProjectItem(item_id="1", title="t", points=5)],
+            output_path=tmp_path / "both.pptx",
+        )
+        assert "Carryover" not in self._text(path)
+
+
+class TestWorkMixBothDirections:
+    """The slide must show inflow and outflow, and flag impossible carry-in."""
+
+    def _text(self, path: Path) -> str:
+        """Flatten shape text and chart series names.
+
+        Args:
+            path: Deck to read.
+
+        Returns:
+            All text joined by newlines.
+        """
+        from pptx import Presentation
+
+        chunks = []
+        for slide in Presentation(str(path)).slides:
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    chunks.append(shape.text_frame.text)
+                if shape.has_chart:
+                    chunks.extend(s.name or "" for s in shape.chart.series)
+                    chunks.extend(shape.chart.plots[0].categories)
+        return "\n".join(str(c) for c in chunks)
+
+    def _build(self, tmp_path: Path, history=(), carryover_points=0.0):
+        """Build a deck with a populated work mix.
+
+        Args:
+            tmp_path: pytest temporary directory.
+            history: Prior sprint metrics.
+            carryover_points: Points marked as carried in.
+
+        Returns:
+            The generated deck path.
+        """
+        from sprint_report.models import SprintMetrics
+
+        return DeckBuilder("X").build(
+            current=SprintMetrics(
+                "Sprint 1",
+                committed_points=110,
+                completed_points=61,
+                planned_points=83,
+                unplanned_points=22,
+                carryover_points=carryover_points,
+            ),
+            history=list(history),
+            burndown_points=[],
+            carryover=[],
+            output_path=tmp_path / "mix.pptx",
+        )
+
+    def test_shows_both_directions(self, tmp_path: Path):
+        """Both categories appear, with all five series."""
+        text = self._text(self._build(tmp_path))
+        for label in (
+            "Came from",
+            "Went to",
+            "Planned",
+            "Unplanned",
+            "Carried in",
+            "Completed",
+            "Rolling forward",
+        ):
+            assert label in text, label
+
+    def test_directions_sum_to_the_same_total(self, tmp_path: Path):
+        """Inflow and outflow are two views of one number."""
+        from pptx import Presentation
+
+        path = self._build(tmp_path, carryover_points=5)
+        chart = next(
+            shape.chart
+            for slide in Presentation(str(path)).slides
+            for shape in slide.shapes
+            if shape.has_chart
+        )
+        values = [list(s.values) for s in chart.series]
+        came_from = sum(v[0] for v in values)
+        went_to = sum(v[1] for v in values)
+        assert came_from == went_to == 110
+
+    def test_first_sprint_carry_in_is_flagged(self, tmp_path: Path):
+        """Carry-in is impossible without a prior sprint; say so."""
+        text = self._text(self._build(tmp_path, carryover_points=5))
+        assert "this is the first sprint" in text
+        assert "mislabelled" in text
+
+    def test_no_warning_when_history_exists(self, tmp_path: Path):
+        """With a prior sprint, carry-in is entirely normal."""
+        from sprint_report.models import SprintMetrics
+
+        history = [SprintMetrics("Sprint 0", completed_points=20)]
+        text = self._text(
+            self._build(tmp_path, history=history, carryover_points=5)
+        )
+        assert "mislabelled" not in text
+
+    def test_no_warning_without_carry_in(self, tmp_path: Path):
+        """A first sprint with no carry-in needs no note."""
+        assert "mislabelled" not in self._text(self._build(tmp_path))
+
+    def test_summary_flags_impossible_carry_in(self):
+        """The machine-readable summary carries the same signal."""
+        from sprint_report.cli import _summary_payload
+        from sprint_report.models import SprintMetrics
+
+        metrics = SprintMetrics("S1", committed_points=110, carryover_points=5)
+        payload = _summary_payload(
+            metrics, "review", [], [], [], False, has_history=False
+        )
+        assert payload["data_quality"]["impossible_carry_in"] is True
+
+    def test_summary_clear_when_history_exists(self):
+        """No flag when an earlier sprint could have supplied the work."""
+        from sprint_report.cli import _summary_payload
+        from sprint_report.models import SprintMetrics
+
+        metrics = SprintMetrics("S2", committed_points=110, carryover_points=5)
+        payload = _summary_payload(
+            metrics, "review", [], [], [], False, has_history=True
+        )
+        assert payload["data_quality"]["impossible_carry_in"] is False
+
+
+class TestWorkMixOrder:
+    """Both bars read left to right as a timeline."""
+
+    def _chart(self, tmp_path: Path):
+        """Build a deck and return its work mix chart.
+
+        Args:
+            tmp_path: pytest temporary directory.
+
+        Returns:
+            The chart object from the work mix slide.
+        """
+        from pptx import Presentation
+
+        from sprint_report.models import SprintMetrics
+
+        path = DeckBuilder("X").build(
+            current=SprintMetrics(
+                "S1", committed_points=110, completed_points=61,
+                planned_points=83, unplanned_points=22, carryover_points=5,
+            ),
+            history=[],
+            burndown_points=[],
+            carryover=[],
+            output_path=tmp_path / "order.pptx",
+        )
+        return next(
+            shape.chart
+            for slide in Presentation(str(path)).slides
+            for shape in slide.shapes
+            if shape.has_chart
+        )
+
+    def test_carried_in_leads(self, tmp_path: Path):
+        """Work already in hand precedes work committed at planning."""
+        names = [s.name for s in self._chart(tmp_path).series]
+        assert names[0] == "Carried in"
+
+    def test_rolling_forward_is_last(self, tmp_path: Path):
+        """Work leaving the sprint sits at the far end."""
+        names = [s.name for s in self._chart(tmp_path).series]
+        assert names[-1] == "Rolling forward"
+
+    def test_full_chronological_order(self, tmp_path: Path):
+        """In, committed, added, closed, out."""
+        names = [s.name for s in self._chart(tmp_path).series]
+        assert names == [
+            "Carried in",
+            "Planned",
+            "Unplanned",
+            "Completed",
+            "Rolling forward",
+        ]

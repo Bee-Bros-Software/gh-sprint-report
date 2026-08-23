@@ -12,7 +12,7 @@ Slide order:
 4. Velocity and rolling average
 5. Commitment vs completed
 6. Work mix (planned / unplanned / carryover)
-7. Carryover detail
+7. Rolling forward (incomplete work)
 8. Forecast
 
 Example:
@@ -82,6 +82,8 @@ class Palette:
         ink: Primary text colour.
         muted: Secondary text colour.
         accent: Primary series and emphasis colour.
+        accent_deep: Darker accent, for a second series that must not be
+            mistaken for the first.
         accent_soft: Secondary series colour.
         warn: Colour for figures needing attention.
         rule: Hairline and gridline colour.
@@ -95,6 +97,7 @@ class Palette:
     ink = RGBColor(0x1F, 0x29, 0x33)
     muted = RGBColor(0x61, 0x6E, 0x7C)
     accent = RGBColor(0x0F, 0x76, 0x6E)
+    accent_deep = RGBColor(0x11, 0x5E, 0x59)
     accent_soft = RGBColor(0x7C, 0xC4, 0xBD)
     warn = RGBColor(0xB4, 0x53, 0x09)
     rule = RGBColor(0xDC, 0xE1, 0xE6)
@@ -488,7 +491,7 @@ class DeckBuilder:
             f"{current.total_items} items.",
             f"Planned {current.planned_points:g} · "
             f"Unplanned {current.unplanned_points:g} · "
-            f"Carryover {current.carryover_points:g}.",
+            f"Carried in {current.carryover_points:g}.",
         ]
         if current.unestimated_items:
             note_lines.append(
@@ -643,69 +646,110 @@ class DeckBuilder:
         history: Sequence[SprintMetrics],
         current: SprintMetrics,
     ) -> None:
-        """Build the planned/unplanned/carryover mix slide.
+        """Build the work mix slide, showing both directions of the sprint.
+
+        Two bars that sum to the same total. **Came from** splits the
+        committed points by origin — planned, pulled in mid-sprint, or rolled
+        in from the sprint before. **Went to** splits the same points by
+        outcome — completed, or rolling forward to the next sprint.
+
+        Showing only one direction invites the reader to supply the other from
+        assumption, and the word "carryover" means opposite things depending
+        on which they assume.
 
         Args:
             presentation: The presentation being built.
-            history: Prior sprint metrics, oldest first.
+            history: Prior sprint metrics; used only to tell whether a
+                previous sprint existed at all.
             current: Metrics for the sprint under review.
         """
         slide = self._blank(presentation)
-        series = list(history) + [current]
-        single = len(series) == 1
         self._heading(
             slide,
             "Work mix",
-            "What this sprint was actually made of"
-            if single
-            else "How much of each sprint was actually planned",
+            "Where this sprint's work came from, and where it ended up",
         )
 
         chart_data = CategoryChartData()
-        chart_data.categories = [metric.iteration for metric in series]
-        chart_data.add_series("Planned", [m.planned_points for m in series])
-        chart_data.add_series("Unplanned", [m.unplanned_points for m in series])
-        chart_data.add_series("Carryover", [m.carryover_points for m in series])
+        chart_data.categories = ["Came from", "Went to"]
+        # Series order is deliberately chronological, so both bars read left
+        # to right as a timeline: work already in hand, work committed at
+        # planning, work that arrived later — then what closed and what leaves.
+        chart_data.add_series("Carried in", (current.carryover_points, 0))
+        chart_data.add_series("Planned", (current.planned_points, 0))
+        chart_data.add_series("Unplanned", (current.unplanned_points, 0))
+        chart_data.add_series("Completed", (0, current.completed_points))
+        chart_data.add_series("Rolling forward", (0, current.remaining_points))
 
-        # A lone stacked column is a slab; a single horizontal bar spanning
-        # the slide reads as a composition, which is what one sprint is.
         frame = slide.shapes.add_chart(
-            XL_CHART_TYPE.BAR_STACKED if single else XL_CHART_TYPE.COLUMN_STACKED,
+            XL_CHART_TYPE.BAR_STACKED,
             MARGIN,
-            Inches(2.2) if single else Inches(1.75),
+            Inches(1.95),
             SLIDE_WIDTH - 2 * MARGIN,
-            Inches(2.2) if single else Inches(4.3),
+            Inches(2.9),
             chart_data,
         )
         chart = frame.chart
-        self._style_chart(chart, show_legend=True)
-        for index, colour in enumerate(
-            (Palette.accent, Palette.warn, Palette.accent_soft)
-        ):
+        self._style_chart(chart, show_legend=True, hide_value_axis=True)
+
+        colours = (
+            Palette.accent_soft,
+            Palette.accent,
+            Palette.warn,
+            Palette.accent_deep,
+            Palette.rule,
+        )
+        for index, colour in enumerate(colours):
             chart.series[index].format.fill.solid()
             chart.series[index].format.fill.fore_color.rgb = colour
-        chart.plots[0].gap_width = 70 if single else 140
-        if single:
-            chart.plots[0].has_data_labels = True
-            chart.plots[0].data_labels.font.size = Pt(13)
-            chart.plots[0].data_labels.font.bold = True
-            chart.plots[0].data_labels.font.color.rgb = Palette.white
+
+        plot = chart.plots[0]
+        plot.gap_width = 80
+        plot.has_data_labels = True
+        plot.data_labels.font.size = Pt(12)
+        plot.data_labels.font.bold = True
+        plot.data_labels.font.color.rgb = Palette.white
+        # Each series is present in only one of the two bars, so the other
+        # holds a zero. A number format whose zero section is empty hides
+        # those labels; setting them per point is not exposed by python-pptx.
+        plot.data_labels.number_format = "0;;;"
+        plot.data_labels.number_format_is_linked = False
+
+        lines = [
+            f"Interrupt load: {current.unplanned_share:g}% of committed points "
+            "arrived after planning.",
+        ]
+        tone = Palette.warn if current.unplanned_share > 20 else Palette.ink
+
+        # A first sprint has nothing behind it, so carry-in is impossible.
+        # Say so rather than charting a figure that cannot be true.
+        if not history and current.carryover_points > 0:
+            lines.append(
+                f"{current.carryover_points:g} points are marked "
+                "'Carried in', but this is the first sprint — nothing existed "
+                "to carry in from. Those items are most likely mislabelled; "
+                "work leaving for the next sprint is counted under "
+                "'Rolling forward'."
+            )
+            tone = Palette.warn
 
         box = slide.shapes.add_textbox(
-            MARGIN,
-            Inches(5.0) if single else Inches(6.2),
-            SLIDE_WIDTH - 2 * MARGIN,
-            Inches(0.9),
+            MARGIN, Inches(5.1), SLIDE_WIDTH - 2 * MARGIN, Inches(1.6)
         )
-        box.text_frame.margin_left = 0
         box.text_frame.word_wrap = True
-        run = _left_run(box.text_frame)
-        run.text = (
-            f"Interrupt load this sprint: {current.unplanned_share:g}% of committed "
-            "points arrived after planning."
-        )
-        run.font.size = Pt(14)
-        run.font.color.rgb = Palette.warn if current.unplanned_share > 20 else Palette.ink
+        box.text_frame.margin_left = 0
+        for index, line in enumerate(lines):
+            paragraph = (
+                box.text_frame.paragraphs[0]
+                if index == 0
+                else box.text_frame.add_paragraph()
+            )
+            paragraph.alignment = PP_ALIGN.LEFT
+            paragraph.space_after = Pt(8)
+            run = paragraph.add_run()
+            run.text = line
+            run.font.size = Pt(15) if index == 0 else Pt(14)
+            run.font.color.rgb = tone if index == 0 else Palette.warn
 
     def _carryover_slide(
         self, presentation: Presentation, carryover: Sequence[ProjectItem]
@@ -726,9 +770,10 @@ class DeckBuilder:
             )
         else:
             heading, sub, empty = (
-                "Carryover",
-                f"{len(carryover)} item(s), {total:g} points rolling forward",
-                "Nothing carried over. Everything committed closed.",
+                "Rolling forward",
+                f"{len(carryover)} item(s), {total:g} points moving to the "
+                "next sprint",
+                "Nothing rolls forward. Everything committed closed.",
             )
         self._heading(slide, heading, sub)
 

@@ -51,7 +51,9 @@ __all__ = [
 
 #: Origin field value marking work pulled in after sprint start.
 ORIGIN_UNPLANNED = "unplanned"
-#: Origin field value marking work rolled over from a previous sprint.
+#: Origin field value marking work that rolled IN from a previous sprint.
+#: This describes provenance, not destination — work leaving for the next
+#: sprint is simply incomplete, and is reported by :func:`carryover_items`.
 ORIGIN_CARRYOVER = "carryover"
 #: Origin field value marking work committed at planning.
 ORIGIN_PLANNED = "planned"

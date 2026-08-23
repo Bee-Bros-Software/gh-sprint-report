@@ -16,8 +16,8 @@ board data out and builds the reports itself.
 | Sprint at a glance | Completed points, predictability, unplanned share, rolling average |
 | Burndown | Remaining points per day against a linear ideal |
 | Delivery trend | Committed against completed per sprint — bar height is velocity, filled portion is predictability |
-| Work mix | Planned / unplanned / carryover |
-| Carryover | What rolls forward, heaviest first |
+| Work mix | Both directions — where the work came from (planned, unplanned, carried in) and where it ended up (completed, rolling forward) |
+| Rolling forward | Incomplete work moving to the next sprint, heaviest first |
 | Forecast | Sprints remaining per milestone at current velocity |
 | Unestimated items | Sprint items with no estimate, linked |
 | Not in a sprint | Board items outside every iteration, linked |
@@ -100,7 +100,7 @@ burndown slide is omitted.
 | Iteration | Iteration | Groups work into sprints, supplies dates |
 | Status | Single select | `Done` marks completion when issues stay open |
 | Points | **Number** | Estimate. Must be Number — a single select cannot be summed |
-| Origin | Single select | `Planned` / `Unplanned` / `Carryover` |
+| Origin | Single select | Where the item came from: `Planned` (committed at planning), `Unplanned` (pulled in mid-sprint), `Carryover` (rolled in from the previous sprint) |
 
 Only the iteration field is required. Everything else degrades gracefully:
 without estimates you get item counts, without `Origin` the work mix is

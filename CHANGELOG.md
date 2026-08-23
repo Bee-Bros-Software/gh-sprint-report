@@ -4,6 +4,39 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] — 2026-08-23
+
+### Changed
+
+- Work mix series are ordered chronologically, so both bars read left to
+  right as a timeline: carried in, planned, unplanned — then completed and
+  rolling forward.
+
+## [1.0.5] — 2026-08-23
+
+### Changed
+
+- The work mix slide now shows both directions as two bars that sum to the
+  same total: **Came from** (planned / unplanned / carried in) and **Went to**
+  (completed / rolling forward). Showing one direction alone invited readers
+  to supply the other from assumption.
+
+### Added
+
+- A first sprint cannot have work carried in. When points are marked as such
+  with no earlier sprint on the board, the slide says so, the CLI warns on
+  stderr, and `--summary-json` carries `data_quality.impossible_carry_in`.
+
+## [1.0.4] — 2026-08-23
+
+### Fixed
+
+- "Carryover" no longer means two opposite things in one deck. The work mix
+  series is now **Carried in** — work that rolled in from the previous sprint,
+  read from the `Origin` field — and the incomplete-work slide is now
+  **Rolling forward**, describing work moving to the next sprint. A test
+  asserts the word is never reused.
+
 ## [1.0.3] — 2026-08-23
 
 ### Fixed

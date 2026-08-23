@@ -457,6 +457,7 @@ def _summary_payload(
     unsprinted: Sequence[ProjectItem],
     carryover: Sequence[ProjectItem],
     has_burndown: bool,
+    has_history: bool = True,
 ) -> dict[str, object]:
     """Assemble the machine-readable summary of a report run.
 
@@ -472,6 +473,8 @@ def _summary_payload(
         unsprinted: Board items outside every iteration.
         carryover: Incomplete items in the sprint.
         has_burndown: Whether snapshot history covered the sprint.
+        has_history: Whether any earlier sprint exists. A first sprint cannot
+            have work carried in, so points marked as such are mislabelled.
 
     Returns:
         A JSON-serialisable dictionary.
@@ -518,6 +521,8 @@ def _summary_payload(
             "origin_field_used": current.unplanned_points > 0
             or current.carryover_points > 0,
             "burndown_available": has_burndown,
+            "impossible_carry_in": not has_history
+            and current.carryover_points > 0,
         },
         "open_items": [
             {
@@ -688,7 +693,13 @@ def _run_report(args: argparse.Namespace) -> int:
 
     if args.summary_json:
         payload = _summary_payload(
-            current, mode, unestimated, unsprinted, open_items, bool(curve)
+            current,
+            mode,
+            unestimated,
+            unsprinted,
+            open_items,
+            bool(curve),
+            has_history=bool(history),
         )
         summary_path = Path(args.summary_json)
         summary_path.parent.mkdir(parents=True, exist_ok=True)
