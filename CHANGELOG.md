@@ -4,6 +4,55 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] — 2026-08-23
+
+### Added
+
+- Every deck records exactly when its data was read: a full local timestamp
+  with timezone on the title slide, a small footer on every other slide, and
+  the same details in the file's own document properties. A bare date could
+  not distinguish two decks generated the same day from a board that changes
+  hourly, and the footer means the stamp survives a slide being pasted
+  somewhere else.
+
+## [1.2.0] — 2026-08-23
+
+### Added
+
+- Velocity measured from closure dates, via `metrics.velocity_by_closure` and
+  `metrics.throughput`, reported in `--summary-json` as
+  `throughput_by_sprint`.
+
+  This answers "how much closed during this sprint's dates" rather than "how
+  much of what this sprint was assigned is now done", and is better in two
+  ways. It is **stable**: moving an unfinished item into the next iteration
+  retroactively removes its points from the sprint that failed to finish it,
+  so assignment-based velocity for a past sprint changes after the fact,
+  while a closure date does not move. And it is **complete**: work closed
+  during a sprint but never assigned to it still consumed capacity.
+
+## [1.1.1] — 2026-08-23
+
+### Fixed
+
+- Completed work was undercounted. `gh project item-list` returns the board's
+  Status column but not the issue's own state, so an issue closed by a merged
+  pull request and never dragged to Done counted as incomplete — depressing
+  completed points, predictability, and the burndown. Issue state is now
+  fetched and takes precedence, and the CLI reports how many items disagreed.
+
+## [1.1.0] — 2026-08-23
+
+### Added
+
+- Burndown is now reconstructed from issue closure dates when no snapshots
+  exist. GitHub retains `closedAt` on every closed issue, which is enough to
+  derive remaining work per day — so a burndown appears for sprints that
+  predate the collector, retroactively.
+- The slide and stderr both state when a curve was reconstructed, because it
+  cannot show mid-sprint scope changes: an item added on day five is counted
+  from day one. Snapshots remain the accurate source.
+
 ## [1.0.6] — 2026-08-23
 
 ### Changed

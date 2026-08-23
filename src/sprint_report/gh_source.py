@@ -271,7 +271,7 @@ def fetch_issues(
 
     Returns:
         Raw issue dictionaries carrying ``number``, ``title``, ``url``,
-        ``state``, ``updatedAt``, and ``assignees``.
+        ``state``, ``updatedAt``, ``closedAt``, and ``assignees``.
 
     Raises:
         GhError: If ``gh`` is missing or the call fails.
@@ -297,7 +297,7 @@ def fetch_issues(
         "--search",
         f"updated:>={since}",
         "--json",
-        "number,title,url,state,updatedAt,assignees",
+        "number,title,url,state,updatedAt,closedAt,assignees",
     ]
     try:
         result = subprocess.run(

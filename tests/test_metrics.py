@@ -16,6 +16,8 @@ from sprint_report.metrics import (
     next_business_days,
     prior_iterations,
     rolling_average,
+    throughput,
+    velocity_by_closure,
     velocity_series,
 )
 
@@ -294,3 +296,88 @@ class TestPriorIterations:
             make_item("y", "S2", 5, start=date(2026, 8, 24)),
         ]
         assert prior_iterations(board, "S2") == []
+
+
+class TestThroughput:
+    """Velocity measured by when work actually closed."""
+
+    def _board(self):
+        """Two sprints with closures inside and across their windows.
+
+        Returns:
+            Project items with closure dates.
+        """
+        from sprint_report.models import ProjectItem
+
+        def made(ident, iteration, start, points, closed_at):
+            return ProjectItem(
+                item_id=str(ident),
+                title=f"Item {ident}",
+                status="Done" if closed_at else "In Progress",
+                iteration=iteration,
+                iteration_start=start,
+                iteration_duration=14,
+                points=points,
+                closed=closed_at is not None,
+                closed_at=closed_at,
+            )
+
+        s1, s2 = date(2026, 8, 10), date(2026, 8, 24)
+        return [
+            made(1, "Sprint 1", s1, 8, date(2026, 8, 12)),
+            made(2, "Sprint 1", s1, 5, date(2026, 8, 20)),
+            made(3, "Sprint 1", s1, 13, None),
+            made(4, "Sprint 2", s2, 8, date(2026, 8, 26)),
+            made(5, "Sprint 2", s2, 3, None),
+        ]
+
+    def test_window_sums_closed_points(self):
+        """Only items closed inside the window count."""
+        assert throughput(self._board(), date(2026, 8, 10), date(2026, 8, 23)) == 13.0
+
+    def test_window_excludes_later_closures(self):
+        """A closure after the window belongs to a later sprint."""
+        assert throughput(self._board(), date(2026, 8, 10), date(2026, 8, 15)) == 8.0
+
+    def test_open_items_never_count(self):
+        """Unclosed work has no closure date and cannot be throughput."""
+        assert throughput(self._board(), date(2026, 8, 24), date(2026, 9, 6)) == 8.0
+
+    def test_reversed_window_rejected(self):
+        """An inverted window is a programming error."""
+        with pytest.raises(ValueError):
+            throughput([], date(2026, 8, 23), date(2026, 8, 10))
+
+    def test_velocity_per_sprint(self):
+        """Each iteration is measured over its own dates."""
+        assert velocity_by_closure(self._board()) == {
+            "Sprint 1": 13.0,
+            "Sprint 2": 8.0,
+        }
+
+    def test_survives_reassignment(self):
+        """Moving an item's iteration does not move its closure date."""
+        from dataclasses import replace
+
+        board = self._board()
+        # The 8-point item closed on 12 Aug is dragged into Sprint 2.
+        moved = [
+            replace(i, iteration="Sprint 2", iteration_start=date(2026, 8, 24))
+            if i.item_id == "1"
+            else i
+            for i in board
+        ]
+        # Assignment-based completion would move those points; throughput
+        # keeps them where the work actually happened.
+        assert velocity_by_closure(moved)["Sprint 1"] == 13.0
+
+    def test_iterations_without_dates_are_omitted(self):
+        """A window cannot be built without a start and end."""
+        from sprint_report.models import ProjectItem
+
+        board = [ProjectItem(item_id="1", title="t", iteration="S1", points=5)]
+        assert velocity_by_closure(board) == {}
+
+    def test_empty_board(self):
+        """Nothing to measure."""
+        assert velocity_by_closure([]) == {}

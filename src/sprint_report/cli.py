@@ -24,6 +24,7 @@ import json
 import os
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from .client import FieldMapping, GitHubApiError, ProjectsClient
@@ -33,13 +34,15 @@ from .gh_source import fetch as gh_fetch
 from .graph import GraphError, GraphUploader
 from .metrics import (
     burndown,
+    burndown_from_closures,
     carryover_items,
     iteration_metrics,
     iteration_titles,
     milestone_remaining,
     prior_iterations,
+    velocity_by_closure,
 )
-from .models import ProjectItem, Snapshot, SprintMetrics, utc_today
+from .models import ProjectItem, Snapshot, SprintMetrics, _parse_date, utc_today
 from .snapshots import SnapshotStore
 from .workbook import OffSprintIssue, build_workbook
 
@@ -458,6 +461,7 @@ def _summary_payload(
     carryover: Sequence[ProjectItem],
     has_burndown: bool,
     has_history: bool = True,
+    throughput_by_sprint: dict[str, float] | None = None,
 ) -> dict[str, object]:
     """Assemble the machine-readable summary of a report run.
 
@@ -473,6 +477,8 @@ def _summary_payload(
         unsprinted: Board items outside every iteration.
         carryover: Incomplete items in the sprint.
         has_burndown: Whether snapshot history covered the sprint.
+        throughput_by_sprint: Points closed within each sprint's dates,
+            measured from closure timestamps rather than board assignment.
         has_history: Whether any earlier sprint exists. A first sprint cannot
             have work carried in, so points marked as such are mislabelled.
 
@@ -524,6 +530,7 @@ def _summary_payload(
             "impossible_carry_in": not has_history
             and current.carryover_points > 0,
         },
+        "throughput_by_sprint": throughput_by_sprint or {},
         "open_items": [
             {
                 "id": item.item_id,
@@ -629,6 +636,82 @@ def _off_sprint_issues(
     return records
 
 
+def _apply_closure_dates(
+    args: argparse.Namespace, items: Sequence[ProjectItem]
+) -> list[ProjectItem]:
+    """Fill in ``closed_at`` from the repositories' issue data.
+
+    ``gh project item-list`` carries neither issue state nor closure
+    timestamps — only the board's Status column, which someone has to
+    maintain by hand. An issue closed by a merged pull request is frequently
+    never dragged to Done, so trusting Status alone undercounts completed
+    work. Both are fetched per repository and joined by issue number.
+
+    A repository that cannot be read is skipped with a warning rather than
+    failing the run.
+
+    Args:
+        args: Parsed command line arguments.
+        items: Board items, possibly lacking closure dates.
+
+    Returns:
+        The items, with ``closed_at`` populated where it could be resolved.
+
+    Example:
+        >>> _apply_closure_dates(args, [])  # doctest: +SKIP
+        []
+    """
+    materialised = list(items)
+
+    repos = args.issues_repo or sorted(
+        {item.repository for item in materialised if item.repository}
+    )
+    closed: dict[str, str | None] = {}
+    for repo in repos:
+        slug = repo.replace("https://github.com/", "").strip("/")
+        if slug.count("/") != 1:
+            continue
+        try:
+            for issue in fetch_issues(slug, "1970-01-01"):
+                if str(issue.get("state", "")).upper() == "CLOSED":
+                    closed[str(issue.get("number"))] = issue.get("closedAt")
+        except GhError as exc:
+            print(f"Issue state unavailable for {slug}: {exc}", file=sys.stderr)
+            continue
+
+    if not closed:
+        return materialised
+
+    # The board's Status column and the issue's own state can disagree: an
+    # issue closed via a merged PR often never gets dragged to Done. The
+    # issue state is the fact; Status is a label someone has to maintain.
+    updated = []
+    for item in materialised:
+        if item.item_id in closed:
+            updated.append(
+                replace(
+                    item,
+                    closed=True,
+                    closed_at=_parse_date(closed[item.item_id]),
+                )
+            )
+        else:
+            updated.append(item)
+
+    reconciled = sum(
+        1
+        for original, current in zip(materialised, updated, strict=True)
+        if current.closed and not original.is_complete
+    )
+    if reconciled:
+        print(
+            f"Note: {reconciled} item(s) are closed in GitHub but not marked "
+            "Done on the board. Counting them as complete.",
+            file=sys.stderr,
+        )
+    return updated
+
+
 def _run_report(args: argparse.Namespace) -> int:
     """Execute the ``report`` command.
 
@@ -640,6 +723,11 @@ def _run_report(args: argparse.Namespace) -> int:
     """
     title, items = _load_board(args)
 
+    # Reconcile board Status against real issue state first: every figure
+    # downstream depends on which items count as complete.
+    if args.source == "gh" or args.from_export:
+        items = _apply_closure_dates(args, items)
+
     iteration = _pick_iteration(items, args.iteration)
     current = iteration_metrics(items, iteration)
 
@@ -650,6 +738,13 @@ def _run_report(args: argparse.Namespace) -> int:
 
     store = SnapshotStore(args.snapshots)
     curve = burndown(store.load_all(), iteration)
+    reconstructed = False
+    if not curve:
+        # No snapshots yet. GitHub still knows when each issue closed, which
+        # is enough for a usable curve — see burndown_from_closures for what
+        # it can and cannot represent.
+        curve = burndown_from_closures(items, iteration)
+        reconstructed = bool(curve)
 
     milestones = sorted({item.milestone for item in items if item.milestone})
     forecasts = [
@@ -676,6 +771,7 @@ def _run_report(args: argparse.Namespace) -> int:
         current=current,
         history=history,
         burndown_points=curve,
+        burndown_reconstructed=reconstructed,
         carryover=open_items,
         output_path=Path(args.output),
         milestone_forecasts=forecasts,
@@ -700,6 +796,7 @@ def _run_report(args: argparse.Namespace) -> int:
             open_items,
             bool(curve),
             has_history=bool(history),
+            throughput_by_sprint=velocity_by_closure(items),
         )
         summary_path = Path(args.summary_json)
         summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -710,8 +807,15 @@ def _run_report(args: argparse.Namespace) -> int:
     _deliver(args, output, iteration)
     if not curve:
         print(
-            "Note: no snapshots cover this sprint, so the burndown slide is "
-            "empty. Run 'snapshot' daily to build history.",
+            "Note: no burndown could be produced — the sprint has no dates or "
+            "no estimated work. Run 'snapshot' daily for an accurate curve.",
+            file=sys.stderr,
+        )
+    elif reconstructed:
+        print(
+            "Note: burndown reconstructed from issue closure dates, so "
+            "mid-sprint scope changes are not visible. Run 'snapshot' daily "
+            "for an accurate curve.",
             file=sys.stderr,
         )
     return 0

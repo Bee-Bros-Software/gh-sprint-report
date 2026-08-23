@@ -36,6 +36,7 @@ from .models import (
     Snapshot,
     SprintMetrics,
     sum_points,
+    utc_today,
 )
 
 __all__ = [
@@ -47,6 +48,9 @@ __all__ = [
     "forecast_sprints",
     "carryover_items",
     "prior_iterations",
+    "burndown_from_closures",
+    "throughput",
+    "velocity_by_closure",
 ]
 
 #: Origin field value marking work pulled in after sprint start.
@@ -402,3 +406,161 @@ def prior_iterations(
     if limit is not None and limit > 0:
         return earlier[-limit:]
     return earlier
+
+
+def burndown_from_closures(
+    items: Iterable[ProjectItem],
+    iteration: str,
+    today: date | None = None,
+) -> list[BurndownPoint]:
+    """Reconstruct a burndown from the dates items were closed.
+
+    Snapshots are the accurate source, because they record scope as it stood
+    on each day. This is the fallback when no snapshots exist: GitHub retains
+    a ``closedAt`` timestamp on every closed issue, and remaining work on a
+    given day is the sprint's scope minus everything closed by then.
+
+    The known inaccuracy is scope: an item added on day five is counted from
+    day one, because nothing records when it joined the sprint. The curve
+    therefore starts at final scope rather than opening scope, which
+    understates mid-sprint growth. Snapshots fix this; nothing else can.
+
+    Items completed by board status alone — moved to Done without the issue
+    being closed — carry no timestamp and are treated as closed on the final
+    day, since the only certain fact is that they are done now.
+
+    Args:
+        items: All board items.
+        iteration: The iteration to chart.
+        today: Override for the current date, for testing.
+
+    Returns:
+        One :class:`BurndownPoint` per day from sprint start to the earlier of
+        today and the sprint end. Empty when the iteration has no dates or no
+        estimated work.
+
+    Example:
+        >>> burndown_from_closures([], "Sprint 1")
+        []
+    """
+    scoped = [item for item in items if item.iteration == iteration]
+    if not scoped:
+        return []
+
+    start = next((i.iteration_start for i in scoped if i.iteration_start), None)
+    end = next((i.iteration_end for i in scoped if i.iteration_end), None)
+    if start is None or end is None:
+        return []
+
+    total = sum_points(scoped)
+    if total <= 0:
+        return []
+
+    current = today or utc_today()
+    last_day = min(end, current)
+    if last_day < start:
+        return []
+
+    # Points closing on each day. An item done on the board but with no
+    # closure timestamp is attributed to the last day in view: it is finished
+    # now, and guessing an earlier date would invent history.
+    closed_on: dict[date, float] = {}
+    for item in scoped:
+        if not item.is_complete:
+            continue
+        when = item.closed_at or last_day
+        when = max(start, min(when, last_day))
+        closed_on[when] = closed_on.get(when, 0.0) + item.effective_points
+
+    span = max((end - start).days, 1)
+    points: list[BurndownPoint] = []
+    burned = 0.0
+    day = start
+    while day <= last_day:
+        burned += closed_on.get(day, 0.0)
+        elapsed = (day - start).days
+        points.append(
+            BurndownPoint(
+                day=day,
+                remaining=round(total - burned, 1),
+                ideal=round(total * (1 - min(elapsed / span, 1.0)), 1),
+            )
+        )
+        day += timedelta(days=1)
+    return points
+
+
+def throughput(
+    items: Iterable[ProjectItem], start: date, end: date
+) -> float:
+    """Points closed within a date window, whoever they were assigned to.
+
+    Args:
+        items: Any collection of project items.
+        start: First day of the window, inclusive.
+        end: Last day of the window, inclusive.
+
+    Returns:
+        The sum of estimates on items closed inside the window.
+
+    Raises:
+        ValueError: If ``end`` precedes ``start``.
+
+    Example:
+        >>> throughput([], date(2026, 8, 10), date(2026, 8, 23))
+        0.0
+    """
+    if end < start:
+        raise ValueError("end must not precede start")
+    return float(
+        sum(
+            item.effective_points
+            for item in items
+            if item.closed_at and start <= item.closed_at <= end
+        )
+    )
+
+
+def velocity_by_closure(items: Iterable[ProjectItem]) -> dict[str, float]:
+    """Velocity per sprint, measured by when work actually closed.
+
+    This is a different question from :attr:`SprintMetrics.completed_points`,
+    which asks "how much of what this sprint was assigned is now done".
+    Throughput asks "how much closed during this sprint's dates", and the
+    distinction matters for two reasons.
+
+    It is **stable**. Moving an unfinished item into the next iteration
+    retroactively removes its points from the sprint that failed to finish
+    it, so assignment-based velocity for a past sprint changes after the
+    fact. A closure date does not move.
+
+    It is **complete**. Work closed during a sprint but never assigned to it
+    still consumed the team's capacity, and belongs in a throughput figure.
+
+    Items with no closure date are excluded rather than guessed at, so a board
+    where completion is tracked only by Status yields zeros here.
+
+    Args:
+        items: All board items.
+
+    Returns:
+        A mapping of iteration title to points closed within its dates,
+        ordered chronologically. Iterations without dates are omitted.
+
+    Example:
+        >>> velocity_by_closure([])
+        {}
+    """
+    materialised = list(items)
+    windows: dict[str, tuple[date, date]] = {}
+    for title in iteration_titles(materialised):
+        scoped = [i for i in materialised if i.iteration == title]
+        start = next((i.iteration_start for i in scoped if i.iteration_start), None)
+        end = next((i.iteration_end for i in scoped if i.iteration_end), None)
+        if start and end:
+            windows[title] = (start, end)
+
+    return {
+        title: throughput(materialised, start, end)
+        for title, (start, end) in windows.items()
+    }

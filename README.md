@@ -35,6 +35,10 @@ left out rather than shipped as a single bar in an empty plot.
 
 **A run summary** (`--summary-json`) carrying the figures plus data-quality
 counts, so downstream tooling can tell when a number should not be trusted.
+It also reports `throughput_by_sprint` — points closed within each sprint's
+dates, measured from closure timestamps. Unlike assignment-based velocity,
+that figure does not change when someone drags an unfinished item into the
+next iteration.
 
 ## Install
 
@@ -89,9 +93,14 @@ that failed to finish it.
 sprint-report --org your-org --project 4 --snapshots ./snapshots snapshot
 ```
 
-Run it daily — cron, launchd, or a scheduled workflow. **History cannot be
-backfilled**, so start before you need the chart. Until snapshots exist, the
-burndown slide is omitted.
+Run it daily — cron, launchd, or a scheduled workflow.
+
+Without snapshots the burndown is **reconstructed from issue closure dates**,
+which GitHub does retain. That works retroactively and is usually good enough.
+Its one blind spot is scope: nothing records when an item joined a sprint, so
+an item added on day five is counted from day one, and mid-sprint growth is
+invisible. Snapshots capture scope as it stood each day and are the accurate
+source; the deck states which one it used.
 
 ## Board requirements
 

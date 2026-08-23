@@ -6,7 +6,7 @@ The client tests stub the HTTP layer so no network access is required.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import UTC, date
 from pathlib import Path
 
 import pytest
@@ -518,8 +518,10 @@ class TestCliCommands:
         assert code == 0
         assert output.exists()
 
-    def test_report_warns_without_snapshots(self, stub_client, tmp_path, capsys):
-        """Missing burndown history is called out on stderr."""
+    def test_report_warns_when_burndown_is_reconstructed(
+        self, stub_client, tmp_path, capsys
+    ):
+        """A curve built from closure dates says so, since scope is invisible."""
         from sprint_report.cli import main
 
         main(
@@ -537,7 +539,8 @@ class TestCliCommands:
                 str(tmp_path / "r.pptx"),
             ]
         )
-        assert "no snapshots cover this sprint" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "reconstructed from issue closure dates" in err
 
     def test_api_error_returns_exit_code_one(self, monkeypatch, tmp_path):
         """An API failure is reported cleanly rather than traced."""
@@ -1377,3 +1380,102 @@ class TestWorkMixOrder:
             "Completed",
             "Rolling forward",
         ]
+
+
+class TestGenerationStamp:
+    """Every deck records exactly when its data was read."""
+
+    def _build(self, tmp_path: Path):
+        """Generate a deck with several slides.
+
+        Args:
+            tmp_path: pytest temporary directory.
+
+        Returns:
+            The generated deck path.
+        """
+        from sprint_report.models import SprintMetrics
+
+        return DeckBuilder("Acme", mode="review").build(
+            current=SprintMetrics(
+                "Sprint 7", committed_points=40, completed_points=30,
+                planned_points=40,
+            ),
+            history=[],
+            burndown_points=[],
+            carryover=[ProjectItem(item_id="1", title="t", points=5)],
+            output_path=tmp_path / "stamped.pptx",
+        )
+
+    def test_stamp_format(self):
+        """Date, time, and zone, in a form a person can read aloud."""
+        from datetime import datetime
+
+        from sprint_report.deck import generation_stamp
+
+        moment = datetime(2026, 8, 23, 14, 32, tzinfo=UTC)
+        assert generation_stamp(moment) == "23 August 2026 at 14:32 UTC"
+
+    def test_title_slide_carries_the_time(self, tmp_path: Path):
+        """A bare date cannot distinguish two decks made the same day."""
+        from pptx import Presentation
+
+        first = Presentation(str(self._build(tmp_path))).slides[0]
+        text = "\n".join(
+            shape.text_frame.text
+            for shape in first.shapes
+            if shape.has_text_frame
+        )
+        assert "Generated" in text
+        assert ":" in text.split("Generated")[1]
+
+    def test_every_other_slide_is_footered(self, tmp_path: Path):
+        """Slides get pasted elsewhere, so the stamp travels with each."""
+        from pptx import Presentation
+
+        slides = Presentation(str(self._build(tmp_path))).slides
+        for slide in list(slides)[1:]:
+            text = "\n".join(
+                shape.text_frame.text
+                for shape in slide.shapes
+                if shape.has_text_frame
+            )
+            assert "generated" in text
+            assert "Sprint 7" in text
+
+    def test_title_slide_has_no_duplicate_footer(self, tmp_path: Path):
+        """The title slide already states it; twice would be clutter."""
+        from pptx import Presentation
+
+        first = Presentation(str(self._build(tmp_path))).slides[0]
+        text = "\n".join(
+            shape.text_frame.text
+            for shape in first.shapes
+            if shape.has_text_frame
+        )
+        assert text.count("enerated") == 1
+
+    def test_file_metadata_records_provenance(self, tmp_path: Path):
+        """Provenance survives slides being copied into another deck."""
+        from pptx import Presentation
+
+        properties = Presentation(str(self._build(tmp_path))).core_properties
+        assert "Sprint 7" in properties.title
+        assert properties.author == "gh-sprint-report"
+        assert "Generated" in properties.comments
+        assert properties.created is not None
+
+    def test_mode_is_named_in_metadata(self, tmp_path: Path):
+        """A mid-sprint check should not be filed as a review."""
+        from pptx import Presentation
+
+        from sprint_report.models import SprintMetrics
+
+        path = DeckBuilder("Acme", mode="midsprint").build(
+            current=SprintMetrics("Sprint 7", committed_points=10),
+            history=[],
+            burndown_points=[],
+            carryover=[],
+            output_path=tmp_path / "mid.pptx",
+        )
+        assert "Mid-Sprint Check" in Presentation(str(path)).core_properties.title

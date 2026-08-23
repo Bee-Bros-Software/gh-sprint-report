@@ -33,7 +33,7 @@ Example:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 
 from pptx import Presentation
@@ -46,7 +46,7 @@ from pptx.util import Emu, Inches, Pt
 from .metrics import forecast_sprints, rolling_average
 from .models import BurndownPoint, ProjectItem, SprintMetrics
 
-__all__ = ["DeckBuilder", "Palette"]
+__all__ = ["DeckBuilder", "Palette", "generation_stamp"]
 
 
 def _left_run(text_frame):
@@ -70,6 +70,31 @@ def _left_run(text_frame):
     paragraph = text_frame.paragraphs[0]
     paragraph.alignment = PP_ALIGN.LEFT
     return paragraph.add_run()
+
+
+def generation_stamp(moment: datetime | None = None) -> str:
+    """Render the generation time as a human-readable local timestamp.
+
+    A date alone is not enough on a board that changes hourly: two decks
+    generated the same day can disagree, and without a time nobody can tell
+    which is current. The timezone is included because these decks travel
+    between people in different ones.
+
+    Args:
+        moment: Override for the current time, for testing. Defaults to now
+            in the local timezone.
+
+    Returns:
+        A string such as ``"23 August 2026 at 14:32 BST"``.
+
+    Example:
+        >>> from datetime import datetime, timezone
+        >>> generation_stamp(datetime(2026, 8, 23, 14, 32, tzinfo=timezone.utc))
+        '23 August 2026 at 14:32 UTC'
+    """
+    when = moment or datetime.now().astimezone()
+    zone = when.strftime("%Z") or "local time"
+    return f"{when:%-d %B %Y} at {when:%H:%M} {zone}"
 
 
 class Palette:
@@ -149,6 +174,7 @@ class DeckBuilder:
         self.project_title = project_title
         self.subtitle = subtitle
         self.mode = mode
+        self._generated_at = datetime.now().astimezone()
 
     def build(
         self,
@@ -160,6 +186,7 @@ class DeckBuilder:
         milestone_forecasts: Sequence[tuple[str, float]] = (),
         unestimated: Sequence[ProjectItem] = (),
         unsprinted: Sequence[ProjectItem] = (),
+        burndown_reconstructed: bool = False,
     ) -> Path:
         """Generate the deck and write it to disk.
 
@@ -174,6 +201,9 @@ class DeckBuilder:
             unestimated: Items in the sprint carrying no estimate, listed with
                 links so they can be corrected.
             unsprinted: Board items assigned to no iteration at all.
+            burndown_reconstructed: Whether the curve was derived from issue
+                closure dates rather than daily snapshots. Annotated on the
+                slide, since it cannot show mid-sprint scope changes.
 
         Trend slides (velocity, predictability, work mix) are omitted when
         ``history`` is empty, and the burndown is omitted when no snapshots
@@ -199,7 +229,9 @@ class DeckBuilder:
         self._title_slide(presentation, current)
         self._summary_slide(presentation, current, history)
         if burndown_points:
-            self._burndown_slide(presentation, current, burndown_points)
+            self._burndown_slide(
+                presentation, current, burndown_points, burndown_reconstructed
+            )
         if history:
             self._trend_slide(presentation, history, current)
         # Work mix needs no history: the planned/unplanned/carryover split of
@@ -229,9 +261,61 @@ class DeckBuilder:
             "Every board item is assigned to an iteration.",
         )
 
+        self._stamp_slides(presentation, current)
+        self._stamp_metadata(presentation, current)
+
         output_path.parent.mkdir(parents=True, exist_ok=True)
         presentation.save(str(output_path))
         return output_path
+
+    def _stamp_slides(self, presentation: Presentation, current: SprintMetrics) -> None:
+        """Add a generation footer to every slide except the title.
+
+        Slides get screenshotted, pasted, and printed individually, so the
+        stamp has to travel with each one rather than living only on slide 1.
+
+        Args:
+            presentation: The presentation being built.
+            current: Metrics for the sprint, for the iteration name.
+        """
+        text = f"{current.iteration} · generated {generation_stamp(self._generated_at)}"
+        for index, slide in enumerate(presentation.slides):
+            if index == 0:
+                continue
+            box = slide.shapes.add_textbox(
+                MARGIN, Inches(6.95), SLIDE_WIDTH - 2 * MARGIN, Inches(0.35)
+            )
+            frame = box.text_frame
+            frame.word_wrap = True
+            frame.margin_left = 0
+            frame.margin_top = 0
+            run = _left_run(frame)
+            run.text = text
+            run.font.size = Pt(9)
+            run.font.color.rgb = Palette.muted
+
+    def _stamp_metadata(
+        self, presentation: Presentation, current: SprintMetrics
+    ) -> None:
+        """Write generation details into the file's own properties.
+
+        Recorded in the document metadata as well as on the slides, so the
+        provenance survives someone copying slides into another deck.
+
+        Args:
+            presentation: The presentation being built.
+            current: Metrics for the sprint under review.
+        """
+        label = "Mid-Sprint Check" if self.mode == "midsprint" else "Sprint Review"
+        properties = presentation.core_properties
+        properties.title = f"{self.project_title} — {label} — {current.iteration}"
+        properties.author = "gh-sprint-report"
+        properties.comments = (
+            f"Generated {generation_stamp(self._generated_at)} by "
+            f"gh-sprint-report. Board data as at that moment."
+        )
+        properties.created = self._generated_at.replace(tzinfo=None)
+        properties.modified = self._generated_at.replace(tzinfo=None)
 
     # ------------------------------------------------------------------
     # Slide-level helpers
@@ -442,7 +526,7 @@ class DeckBuilder:
         footer_paragraph = footer.paragraphs[0]
         footer_paragraph.alignment = PP_ALIGN.LEFT
         footer_run = footer_paragraph.add_run()
-        footer_run.text = f"Generated {date.today():%d %B %Y}"
+        footer_run.text = f"Generated {generation_stamp(self._generated_at)}"
         footer_run.font.size = Pt(12)
         footer_run.font.color.rgb = Palette.muted
 
@@ -519,6 +603,7 @@ class DeckBuilder:
         presentation: Presentation,
         current: SprintMetrics,
         points: Sequence[BurndownPoint],
+        reconstructed: bool = False,
     ) -> None:
         """Build the burndown slide.
 
@@ -526,6 +611,8 @@ class DeckBuilder:
             presentation: The presentation being built.
             current: Metrics for the sprint under review.
             points: The burndown curve; an empty sequence renders a notice.
+            reconstructed: Whether the curve came from closure dates rather
+                than snapshots.
         """
         slide = self._blank(presentation)
         self._heading(slide, "Burndown", f"Remaining points across {current.iteration}")
