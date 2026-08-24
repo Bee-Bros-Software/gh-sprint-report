@@ -44,7 +44,7 @@ from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION, XL_TICK_MARK
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Emu, Inches, Pt
 
-from .metrics import forecast_sprints, rolling_average
+from .metrics import ScopeChange, forecast_sprints, rolling_average
 from .models import BurndownPoint, ProjectItem, SprintMetrics
 
 __all__ = ["DeckBuilder", "Palette", "generation_stamp"]
@@ -191,6 +191,7 @@ class DeckBuilder:
         unestimated: Sequence[ProjectItem] = (),
         unsprinted: Sequence[ProjectItem] = (),
         burndown_reconstructed: bool = False,
+        churn: Sequence[ScopeChange] = (),
     ) -> Path:
         """Generate the deck and write it to disk.
 
@@ -205,6 +206,7 @@ class DeckBuilder:
             unestimated: Items in the sprint carrying no estimate, listed with
                 links so they can be corrected.
             unsprinted: Board items assigned to no iteration at all.
+            churn: Day-by-day scope changes, from snapshot diffs.
             burndown_reconstructed: Whether the curve was derived from issue
                 closure dates rather than daily snapshots. Annotated on the
                 slide, since it cannot show mid-sprint scope changes.
@@ -246,6 +248,8 @@ class DeckBuilder:
         # from the first sprint onward.
         if current.committed_points > 0:
             self._work_mix_slide(presentation, history, current)
+        if churn:
+            self._scope_churn_slide(presentation, current, churn)
         self._carryover_slide(presentation, carryover)
         if milestone_forecasts:
             self._forecast_slide(
@@ -705,6 +709,109 @@ class DeckBuilder:
         chart.series[0].format.line.width = Pt(2.75)
         chart.series[1].format.line.color.rgb = Palette.rule
         chart.series[1].format.line.width = Pt(2)
+
+    def _scope_churn_slide(
+        self,
+        presentation: Presentation,
+        current: SprintMetrics,
+        changes: Sequence[ScopeChange],
+    ) -> None:
+        """Build the scope churn slide.
+
+        What entered and left the sprint after it started. GitHub keeps no
+        history of iteration-field changes, so this comes from diffing daily
+        snapshots — which means it is only as granular as the collector's
+        schedule, and only exists from the day it was switched on.
+
+        This is usually the most useful slide for a leadership audience: it
+        answers "did the plan hold" with specifics rather than a percentage.
+
+        Args:
+            presentation: The presentation being built.
+            current: Metrics for the sprint under review.
+            changes: Day-by-day membership changes.
+        """
+        slide = self._blank(presentation)
+        added = sum(change.added_points for change in changes)
+        removed = sum(change.removed_points for change in changes)
+        net = added - removed
+        direction = "grew" if net > 0 else "shrank" if net < 0 else "held"
+        self._heading(
+            slide,
+            "Scope churn",
+            f"Scope {direction} by {abs(net):g} points after the sprint started"
+            if net
+            else "Scope held from planning to close",
+        )
+
+        if not changes:
+            self._empty_notice(
+                slide,
+                "No scope changes recorded. Either nothing moved, or daily "
+                "snapshots did not cover this sprint.",
+            )
+            return
+
+        rows = [
+            (change.day, item, "In")
+            for change in changes
+            for item in change.added
+        ] + [
+            (change.day, item, "Out")
+            for change in changes
+            for item in change.removed
+        ]
+        rows.sort(key=lambda row: (row[0], row[2]))
+        shown = rows[:10]
+
+        table = slide.shapes.add_table(
+            len(shown) + 1,
+            4,
+            MARGIN,
+            Inches(1.9),
+            SLIDE_WIDTH - 2 * MARGIN,
+            Inches(0.34) * (len(shown) + 1),
+        ).table
+        table.first_row = True
+        table.horz_banding = False
+        table.columns[0].width = Inches(1.2)
+        table.columns[1].width = Inches(1.0)
+        table.columns[2].width = Inches(8.7)
+        table.columns[3].width = Inches(1.0)
+
+        for column, label in enumerate(("Day", "In/Out", "Item", "Points")):
+            cell = table.cell(0, column)
+            cell.text = label
+            self._style_cell(cell, bold=True, colour=Palette.white, size=Pt(12))
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = Palette.ink
+
+        for row, (day, item, direction_label) in enumerate(shown, start=1):
+            table.cell(row, 0).text = f"{day:%d %b}"
+            table.cell(row, 1).text = direction_label
+            title = item.title if len(item.title) <= 74 else item.title[:71] + "..."
+            table.cell(row, 2).text = title
+            table.cell(row, 3).text = f"{item.effective_points:g}"
+            for column in range(4):
+                cell = table.cell(row, column)
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = (
+                    Palette.surface if row % 2 else Palette.white
+                )
+                self._style_cell(cell, size=Pt(12))
+
+        summary = f"{added:g} points added, {removed:g} removed"
+        if len(rows) > len(shown):
+            summary += f" · {len(rows) - len(shown)} further change(s) not shown"
+        box = slide.shapes.add_textbox(
+            MARGIN, Inches(6.4), SLIDE_WIDTH - 2 * MARGIN, Inches(0.5)
+        )
+        box.text_frame.word_wrap = True
+        box.text_frame.margin_left = 0
+        run = _left_run(box.text_frame)
+        run.text = summary
+        run.font.size = Pt(15)
+        run.font.color.rgb = Palette.warn if added > removed else Palette.ink
 
     def _trend_slide(
         self,

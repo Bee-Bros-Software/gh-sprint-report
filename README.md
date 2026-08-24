@@ -22,6 +22,7 @@ board data out and builds the reports itself.
 | Forecast | Sprints remaining per milestone at current velocity |
 | Unestimated items | Sprint items with no estimate, linked |
 | Not in a sprint | Board items outside every iteration, linked |
+| Scope churn | What entered and left the sprint after it started (needs snapshots) |
 
 Slides with nothing to say are omitted — a trend chart with one data point is
 left out rather than shipped as a single bar in an empty plot.
@@ -160,6 +161,11 @@ and forecast dates. The tool computes all three.
 See [CONTRIBUTING.md](CONTRIBUTING.md). Google-style docstrings, PEP 484
 hints, 95% docstring coverage enforced, tests for the failure paths, and a
 Sphinx build with warnings as errors.
+
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) — including the board fields worth adding now,
+since none of that data can be reconstructed later.
 
 ## Licence
 

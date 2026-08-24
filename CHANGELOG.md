@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-08-23
+
+### Added
+
+- A **Scope churn** slide: what entered and left the sprint after it started,
+  by day, with a net figure. Derived by diffing daily snapshots, since GitHub
+  keeps no history of iteration-field changes. Appears only when snapshots
+  cover the sprint.
+- `ROADMAP.md`, documenting planned work and — more usefully — the board
+  fields each feature needs recorded as work happens, since none of it can be
+  backfilled.
+
 ## [1.3.1] — 2026-08-23
 
 ### Fixed

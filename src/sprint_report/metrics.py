@@ -28,6 +28,7 @@ Example:
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 from .models import (
@@ -51,6 +52,8 @@ __all__ = [
     "burndown_from_closures",
     "throughput",
     "velocity_by_closure",
+    "scope_changes",
+    "ScopeChange",
 ]
 
 #: Origin field value marking work pulled in after sprint start.
@@ -570,3 +573,107 @@ def velocity_by_closure(items: Iterable[ProjectItem]) -> dict[str, float]:
         title: throughput(materialised, start, end)
         for title, (start, end) in windows.items()
     }
+
+
+@dataclass(frozen=True)
+class ScopeChange:
+    """Items entering or leaving a sprint on one day.
+
+    Attributes:
+        day: The day the change was first observed.
+        added: Items present that were absent the previous day.
+        removed: Items absent that were present the previous day.
+
+    Example:
+        >>> from datetime import date
+        >>> ScopeChange(date(2026, 8, 12), [], []).net_points
+        0.0
+    """
+
+    day: date
+    added: Sequence[ProjectItem]
+    removed: Sequence[ProjectItem]
+
+    @property
+    def added_points(self) -> float:
+        """Points that entered the sprint.
+
+        Returns:
+            The sum of estimates on added items.
+
+        Example:
+            >>> from datetime import date
+            >>> ScopeChange(date(2026, 8, 12), [], []).added_points
+            0.0
+        """
+        return sum_points(self.added)
+
+    @property
+    def removed_points(self) -> float:
+        """Points that left the sprint.
+
+        Returns:
+            The sum of estimates on removed items.
+
+        Example:
+            >>> from datetime import date
+            >>> ScopeChange(date(2026, 8, 12), [], []).removed_points
+            0.0
+        """
+        return sum_points(self.removed)
+
+    @property
+    def net_points(self) -> float:
+        """Net change in committed points.
+
+        Returns:
+            Added minus removed.
+
+        Example:
+            >>> from datetime import date
+            >>> ScopeChange(date(2026, 8, 12), [], []).net_points
+            0.0
+        """
+        return self.added_points - self.removed_points
+
+
+def scope_changes(
+    snapshots: Sequence[Snapshot], iteration: str
+) -> list[ScopeChange]:
+    """Find items that entered or left a sprint, day by day.
+
+    GitHub keeps no history of iteration-field changes, so this is derived by
+    diffing consecutive snapshots. It is therefore only as granular as the
+    collector's schedule: two changes on the same day net out, and a day with
+    no snapshot is attributed to the next one.
+
+    Args:
+        snapshots: Daily snapshots, in any order.
+        iteration: The iteration to examine.
+
+    Returns:
+        One :class:`ScopeChange` per day where membership changed, oldest
+        first. Days with no change are omitted.
+
+    Example:
+        >>> scope_changes([], "Sprint 1")
+        []
+    """
+    relevant = sorted(snapshots, key=lambda snap: snap.captured_on)
+    if len(relevant) < 2:
+        return []
+
+    changes: list[ScopeChange] = []
+    previous = {i.item_id: i for i in relevant[0].for_iteration(iteration)}
+
+    for snapshot in relevant[1:]:
+        current = {i.item_id: i for i in snapshot.for_iteration(iteration)}
+        added = [item for key, item in current.items() if key not in previous]
+        removed = [item for key, item in previous.items() if key not in current]
+        if added or removed:
+            changes.append(
+                ScopeChange(day=snapshot.captured_on, added=added, removed=removed)
+            )
+        previous = current
+
+    return changes

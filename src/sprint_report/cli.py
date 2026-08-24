@@ -40,6 +40,7 @@ from .metrics import (
     iteration_titles,
     milestone_remaining,
     prior_iterations,
+    scope_changes,
     velocity_by_closure,
 )
 from .models import ProjectItem, Snapshot, SprintMetrics, _parse_date, utc_today
@@ -737,7 +738,9 @@ def _run_report(args: argparse.Namespace) -> int:
     history = prior_iterations(items, iteration, limit=args.history)
 
     store = SnapshotStore(args.snapshots)
-    curve = burndown(store.load_all(), iteration)
+    snapshots = store.load_all()
+    curve = burndown(snapshots, iteration)
+    churn = scope_changes(snapshots, iteration)
     reconstructed = False
     if not curve:
         # No snapshots yet. GitHub still knows when each issue closed, which
@@ -772,6 +775,7 @@ def _run_report(args: argparse.Namespace) -> int:
         history=history,
         burndown_points=curve,
         burndown_reconstructed=reconstructed,
+        churn=churn,
         carryover=open_items,
         output_path=Path(args.output),
         milestone_forecasts=forecasts,
