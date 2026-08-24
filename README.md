@@ -23,6 +23,7 @@ board data out and builds the reports itself.
 | Unestimated items | Sprint items with no estimate, linked |
 | Not in a sprint | Board items outside every iteration, linked |
 | Scope churn | What entered and left the sprint after it started (needs snapshots) |
+| Cycle time | Median days from work starting to finishing, with the slowest items — retroactive, from status-change history |
 
 Slides with nothing to say are omitted — a trend chart with one data point is
 left out rather than shipped as a single bar in an empty plot.

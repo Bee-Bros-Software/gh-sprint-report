@@ -12,7 +12,6 @@ history behind it.
 
 | Field | Type | Why |
 |---|---|---|
-| `Started` | Date | Set when work actually begins. Cycle time from creation includes however long an item sat in the backlog, which is noise. Cycle time from `Started` is the number that means something. |
 | `Blocked` | Single select: `No` / `Waiting on us` / `Waiting on them` | Distinguishing internal from external blockers is what makes the figure actionable. A single boolean tells you there is a problem but not whose. |
 | `Blocked since` | Date | Age is the signal. A one-day block is normal; a three-week block is a project risk. |
 | `Health` | Single select: `On track` / `At risk` / `Off track` | Deliberately a human judgement, not derived. A person's read of a project usually leads the metrics by a week or two. |
@@ -23,15 +22,11 @@ so no points-based figure works without it.
 
 ## Planned
 
-### Cycle time
+### Cycle time — shipped in 1.5.0
 
-Median days from `Started` to close, trending across sprints, with a
-distribution rather than only an average — the tail is where the problems
-live. Works partially today from `createdAt` and `closedAt`; the `Started`
-field is what makes it trustworthy.
-
-Worth more to a leadership audience than velocity: it is measured in days
-rather than points, so it cannot inflate and it compares across teams.
+Measured from `ProjectV2ItemStatusChangedEvent`, so no field needs adding and
+it works retroactively. Still to come: trending across sprints, and a
+distribution rather than only a median and a tail.
 
 ### Blockers
 
@@ -51,20 +46,16 @@ could already see on the velocity chart.
 
 ### Critical path
 
-Requires dependency information, which GitHub Projects does not model.
-Sub-issues give hierarchy — parent to child — but not "A must finish before
-B", and the two are different questions.
+GitHub Issues has **native dependencies** — `BlockingAddedEvent` and
+`BlockedByAddedEvent` appear on the issue timeline, so the blocking graph is
+queryable and retroactive. No convention in issue bodies, no hand-maintained
+`Depends on` field.
 
-Two viable approaches, neither pretty:
-
-- **Convention in issue bodies.** A `Blocked by: #123` line, parsed. Fragile,
-  but needs no new tooling and works today.
-- **A `Depends on` text field** holding issue numbers. Structured, still
-  manual, and prone to going stale.
-
-Either way the graph has to be maintained by hand, and a stale dependency
-graph produces a confidently wrong critical path. Worth being sure the team
-will keep it current before building the feature.
+The remaining work is graph traversal: build the dependency graph, find the
+longest path by remaining estimate, and flag items on it. The honest caveat
+is that a critical path is only as good as the dependencies people actually
+record, so the first version should also report how many items have no
+dependency links at all.
 
 ### Scope churn over time
 
@@ -84,11 +75,19 @@ than it is.
 **Estimation accuracy per person.** Same failure mode as individual
 throughput, with the added effect of pushing estimates upward.
 
-## Data that does not exist
+## What GitHub does and does not retain
 
-GitHub keeps no history of Projects v2 field changes — no API, and iteration
-and number field changes do not appear in the issue timeline. Anything about
-*how* an item moved has to be captured as it happens:
+More is retained than is widely documented. Confirmed present on the issue
+timeline and queryable retroactively:
+
+- `AddedToProjectV2Event` — when an issue joined a board
+- `ProjectV2ItemStatusChangedEvent` — every status transition, with previous
+  and new values
+- `BlockingAddedEvent` / `ParentIssueAddedEvent` — dependencies and hierarchy
+
+Not observed: iteration or number field changes. If an item's sprint
+assignment or estimate changes, nothing appears to record it, so scope churn
+and estimate history still need capturing as they happen:
 
 - **Daily snapshots** (`sprint-report snapshot`) — polling, one file per day.
   Granular to the day. This is what scope churn is built on.

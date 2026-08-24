@@ -21,6 +21,11 @@ snapshots
 
 .. automodule:: sprint_report.snapshots
 
+timeline
+--------
+
+.. automodule:: sprint_report.timeline
+
 metrics
 -------
 

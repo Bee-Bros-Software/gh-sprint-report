@@ -36,6 +36,7 @@ from .metrics import (
     burndown,
     burndown_from_closures,
     carryover_items,
+    cycle_time_summary,
     iteration_metrics,
     iteration_titles,
     milestone_remaining,
@@ -45,6 +46,7 @@ from .metrics import (
 )
 from .models import ProjectItem, Snapshot, SprintMetrics, _parse_date, utc_today
 from .snapshots import SnapshotStore
+from .timeline import fetch_status_events
 from .workbook import OffSprintIssue, build_workbook
 
 __all__ = ["main", "build_parser"]
@@ -756,6 +758,23 @@ def _run_report(args: argparse.Namespace) -> int:
         if milestone_remaining(items, name) > 0
     ]
 
+    # Status transitions are retained by GitHub and available retroactively,
+    # so cycle time works for sprints that predate any collector.
+    histories: dict[str, object] = {}
+    if args.source == "gh" or args.from_export:
+        for repo in args.issues_repo or sorted(
+            {item.repository for item in items if item.repository}
+        ):
+            slug = repo.replace("https://github.com/", "").strip("/")
+            if slug.count("/") != 1:
+                continue
+            try:
+                histories.update(fetch_status_events(slug))
+            except GhError as exc:
+                print(f"Timeline unavailable for {slug}: {exc}", file=sys.stderr)
+
+    cycle = cycle_time_summary(items, histories, iteration)
+
     mode = _resolve_mode(args.mode, current)
     sprint_items = [item for item in items if item.iteration == iteration]
     unestimated = [item for item in sprint_items if item.points is None]
@@ -776,6 +795,7 @@ def _run_report(args: argparse.Namespace) -> int:
         burndown_points=curve,
         burndown_reconstructed=reconstructed,
         churn=churn,
+        cycle_time=cycle,
         carryover=open_items,
         output_path=Path(args.output),
         milestone_forecasts=forecasts,
@@ -802,6 +822,11 @@ def _run_report(args: argparse.Namespace) -> int:
             has_history=bool(history),
             throughput_by_sprint=velocity_by_closure(items),
         )
+        payload["cycle_time"] = {
+            "median_days": cycle.get("median"),
+            "measured_items": cycle.get("count"),
+            "unmeasured_completed_items": cycle.get("unmeasured"),
+        }
         summary_path = Path(args.summary_json)
         summary_path.parent.mkdir(parents=True, exist_ok=True)
         summary_path.write_text(

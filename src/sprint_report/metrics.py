@@ -54,6 +54,7 @@ __all__ = [
     "velocity_by_closure",
     "scope_changes",
     "ScopeChange",
+    "cycle_time_summary",
 ]
 
 #: Origin field value marking work pulled in after sprint start.
@@ -677,3 +678,71 @@ def scope_changes(
         previous = current
 
     return changes
+
+
+def cycle_time_summary(
+    items: Iterable[ProjectItem],
+    histories: dict[str, object],
+    iteration: str | None = None,
+) -> dict[str, object]:
+    """Summarise how long finished work took.
+
+    Cycle time is measured from the first transition into a working status,
+    not from issue creation: creation includes however long an item sat in a
+    backlog, and mixing queue time into cycle time makes a fast team with a
+    large backlog look slow.
+
+    The median is reported rather than the mean because cycle times are
+    heavily right-skewed — one item stuck for a month drags an average
+    somewhere no real item sits. The slowest few are returned separately,
+    since that tail is usually where the process problem is.
+
+    Args:
+        items: Board items to consider.
+        histories: Mapping of issue number to timeline history, as returned
+            by :func:`sprint_report.timeline.fetch_status_events`.
+        iteration: If given, restrict to items in that iteration.
+
+    Returns:
+        A dict with ``median``, ``count``, ``longest`` (a list of
+        ``(item, days)`` pairs, slowest first), and ``unmeasured`` — items
+        that finished without ever passing through a working status.
+
+    Example:
+        >>> cycle_time_summary([], {})["count"]
+        0
+    """
+    scoped = [
+        item
+        for item in items
+        if iteration is None or item.iteration == iteration
+    ]
+
+    measured: list[tuple[ProjectItem, int]] = []
+    unmeasured = 0
+    for item in scoped:
+        history = histories.get(item.item_id)
+        days = getattr(history, "cycle_days", None) if history else None
+        if days is None:
+            if item.is_complete:
+                unmeasured += 1
+            continue
+        measured.append((item, days))
+
+    if not measured:
+        return {"median": None, "count": 0, "longest": [], "unmeasured": unmeasured}
+
+    values = sorted(days for _, days in measured)
+    middle = len(values) // 2
+    median = (
+        values[middle]
+        if len(values) % 2
+        else (values[middle - 1] + values[middle]) / 2
+    )
+
+    return {
+        "median": median,
+        "count": len(measured),
+        "longest": sorted(measured, key=lambda pair: pair[1], reverse=True)[:8],
+        "unmeasured": unmeasured,
+    }

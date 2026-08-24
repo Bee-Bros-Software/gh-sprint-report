@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] — 2026-08-23
+
+### Added
+
+- A **Cycle time** slide: median days from work starting to finishing, with
+  the slowest items listed. Built from `ProjectV2ItemStatusChangedEvent` on
+  the issue timeline, which GitHub retains — so it works **retroactively**,
+  with no field to add and no collector to have been running.
+- Measured from the first transition into a working status rather than from
+  issue creation, so backlog queue time is excluded. Median rather than mean,
+  because cycle times are right-skewed.
+- `--summary-json` gains a `cycle_time` block.
+
+### Fixed
+
+- `ROADMAP.md` claimed GitHub Projects does not model dependencies. It does:
+  `BlockingAddedEvent` is on the issue timeline, so critical path needs graph
+  traversal rather than a hand-maintained convention. The suggested `Started`
+  date field is also unnecessary — status transitions already carry it.
+
 ## [1.4.0] — 2026-08-23
 
 ### Added

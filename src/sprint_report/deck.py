@@ -4,17 +4,21 @@ Builds a self-contained ``.pptx`` from computed metrics. Charts are created as
 native PowerPoint charts rather than rendered images, so numbers stay editable
 and the deck can be adjusted live during review.
 
-Slide order:
+Slide order. Any slide with nothing to say is omitted rather than rendered
+empty, so a first sprint produces a shorter deck than an established one:
 
 1. Title
-2. Sprint summary (headline figures)
+2. Sprint at a glance
 3. Burndown
 4. Burnup
-4. Velocity and rolling average
-5. Commitment vs completed
-6. Work mix (planned / unplanned / carryover)
-7. Rolling forward (incomplete work)
-8. Forecast
+5. Velocity
+6. Work mix
+7. Scope churn
+8. Cycle time
+9. Rolling forward (incomplete work)
+10. Forecast
+11. Unestimated items
+12. Not in a sprint
 
 Example:
     >>> import tempfile, pathlib
@@ -192,6 +196,7 @@ class DeckBuilder:
         unsprinted: Sequence[ProjectItem] = (),
         burndown_reconstructed: bool = False,
         churn: Sequence[ScopeChange] = (),
+        cycle_time: dict[str, object] | None = None,
     ) -> Path:
         """Generate the deck and write it to disk.
 
@@ -207,6 +212,7 @@ class DeckBuilder:
                 links so they can be corrected.
             unsprinted: Board items assigned to no iteration at all.
             churn: Day-by-day scope changes, from snapshot diffs.
+            cycle_time: Output of :func:`metrics.cycle_time_summary`.
             burndown_reconstructed: Whether the curve was derived from issue
                 closure dates rather than daily snapshots. Annotated on the
                 slide, since it cannot show mid-sprint scope changes.
@@ -250,6 +256,8 @@ class DeckBuilder:
             self._work_mix_slide(presentation, history, current)
         if churn:
             self._scope_churn_slide(presentation, current, churn)
+        if cycle_time and cycle_time.get("count"):
+            self._cycle_time_slide(presentation, current, cycle_time)
         self._carryover_slide(presentation, carryover)
         if milestone_forecasts:
             self._forecast_slide(
@@ -998,6 +1006,127 @@ class DeckBuilder:
             run.text = line
             run.font.size = Pt(15) if index == 0 else Pt(14)
             run.font.color.rgb = tone if index == 0 else Palette.warn
+
+    def _cycle_time_slide(
+        self,
+        presentation: Presentation,
+        current: SprintMetrics,
+        summary: dict[str, object],
+    ) -> None:
+        """Build the cycle time slide.
+
+        Days from work starting to finishing, measured from status
+        transitions. Unlike velocity, this is denominated in days rather than
+        points, so it cannot inflate and it compares across teams — which
+        makes it the better figure to put in front of an executive.
+
+        The median leads and the slowest items are listed, because cycle times
+        are right-skewed and the tail is where the process problem lives.
+
+        Args:
+            presentation: The presentation being built.
+            current: Metrics for the sprint under review.
+            summary: Output of :func:`metrics.cycle_time_summary`.
+        """
+        slide = self._blank(presentation)
+        median = summary.get("median")
+        count = summary.get("count") or 0
+        self._heading(
+            slide,
+            "Cycle time",
+            f"Median {median:g} days from work starting to finishing, "
+            f"across {count} item(s)"
+            if median is not None
+            else "How long work takes once it starts",
+        )
+
+        if not count:
+            self._empty_notice(
+                slide,
+                "No items passed through a working status. Cycle time needs "
+                "items to move into In Progress rather than jumping straight "
+                "to Done.",
+            )
+            return
+
+        longest = summary.get("longest") or []
+        rows = list(longest)[:8]
+        table = slide.shapes.add_table(
+            len(rows) + 1,
+            3,
+            MARGIN,
+            Inches(1.95),
+            SLIDE_WIDTH - 2 * MARGIN,
+            Inches(0.34) * (len(rows) + 1),
+        ).table
+        table.first_row = True
+        table.horz_banding = False
+        table.columns[0].width = Inches(1.0)
+        table.columns[1].width = Inches(9.0)
+        table.columns[2].width = Inches(1.9)
+
+        for column, label in enumerate(("Issue", "Slowest items", "Days")):
+            cell = table.cell(0, column)
+            cell.text = label
+            self._style_cell(cell, bold=True, colour=Palette.white, size=Pt(12))
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = Palette.ink
+
+        for row, (item, days) in enumerate(rows, start=1):
+            number = table.cell(row, 0)
+            number.text = f"#{item.item_id}"
+
+            link_cell = table.cell(row, 1)
+            link_cell.text = ""
+            paragraph = link_cell.text_frame.paragraphs[0]
+            paragraph.alignment = PP_ALIGN.LEFT
+            run = paragraph.add_run()
+            title = item.title if len(item.title) <= 86 else item.title[:83] + "..."
+            run.text = title
+            if item.url:
+                run.hyperlink.address = item.url
+
+            table.cell(row, 2).text = f"{days}"
+            for column in range(3):
+                cell = table.cell(row, column)
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = (
+                    Palette.surface if row % 2 else Palette.white
+                )
+                self._style_cell(cell, size=Pt(12))
+            if item.url:
+                run.font.color.rgb = Palette.accent
+                run.font.underline = True
+
+        lines = [
+            "Measured from the first move into a working status, so backlog "
+            "time is excluded. Median rather than mean, because one stuck "
+            "item drags an average somewhere no real item sits."
+        ]
+        unmeasured = summary.get("unmeasured") or 0
+        if unmeasured:
+            lines.append(
+                f"{unmeasured} finished item(s) never passed through a working "
+                "status and could not be measured."
+            )
+
+        box = slide.shapes.add_textbox(
+            MARGIN, Inches(5.4), SLIDE_WIDTH - 2 * MARGIN, Inches(1.4)
+        )
+        box.text_frame.word_wrap = True
+        box.text_frame.margin_left = 0
+        for index, line in enumerate(lines):
+            paragraph = (
+                box.text_frame.paragraphs[0]
+                if index == 0
+                else box.text_frame.add_paragraph()
+            )
+            paragraph.alignment = PP_ALIGN.LEFT
+            paragraph.space_after = Pt(8)
+            run = paragraph.add_run()
+            run.text = line
+            run.font.size = Pt(14)
+            run.font.color.rgb = Palette.muted if index == 0 else Palette.warn
 
     def _carryover_slide(
         self, presentation: Presentation, carryover: Sequence[ProjectItem]
